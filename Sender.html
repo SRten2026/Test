@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Plane Sender</title>
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <style>
+    body { background: #000; color: #0f0; font-family: monospace; padding: 20px; }
+    input, button { width: 100%; padding: 12px; margin: 8px 0; background: #222; color: #0f0; border: 1px solid #0f0; font-size: 16px; border-radius: 4px; }
+    #status { margin-top: 15px; color: #ffeb3b; font-size: 14px; }
+  </style>
+</head>
+<body>
+
+  <h2>✈️ Plane Transmitter</h2>
+  <label>CallSign / Room ID:</label>
+  <input type="text" id="planeId" value="plane77">
+  <button id="startBtn">START CAMERA</button>
+  <div id="status">Status: Idle</div>
+
+  <script>
+    let peer = null;
+    let tele = { roll: 0, pitch: 0 };
+
+    // Gyroscope / Accelerometer data
+    window.addEventListener('deviceorientation', (e) => {
+      let gamma = e.gamma || 0; // Roll
+      let beta = e.beta || 0;   // Pitch
+
+      // Phone Landscape adjustment
+      if (window.orientation === 90) {
+        tele.roll = -beta;
+        tele.pitch = -gamma;
+      } else if (window.orientation === -90) {
+        tele.roll = beta;
+        tele.pitch = gamma;
+      } else {
+        tele.roll = gamma;
+        tele.pitch = beta;
+      }
+    });
+
+    document.getElementById('startBtn').addEventListener('click', async () => {
+      const planeId = document.getElementById('planeId').value.trim().toLowerCase();
+      if (!planeId) return alert('Enter Plane ID');
+
+      document.getElementById('status').innerText = "Starting Camera...";
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 }, facingMode: 'environment' },
+          audio: false
+        });
+
+        peer = new Peer(planeId);
+
+        peer.on('open', (id) => {
+          document.getElementById('status').innerText = `Online: [${id}] - Ready!`;
+          document.getElementById('status').style.color = '#0f0';
+        });
+
+        // Send Pitch/Roll over data channel
+        peer.on('connection', (conn) => {
+          setInterval(() => {
+            if (conn && conn.open) conn.send(tele);
+          }, 33); // ~30Hz update rate
+        });
+
+        // Send Video stream to receiver
+        peer.on('call', (call) => {
+          call.answer(stream);
+          document.getElementById('status').innerText = "Transmitting Video Live!";
+        });
+
+      } catch (err) {
+        document.getElementById('status').innerText = "Error: " + err.message;
+      }
+    });
+  </script>
+</body>
+</html>

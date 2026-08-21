@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>FPV Receiver Horizon</title>
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #000; overflow: hidden; width: 100vw; height: 100vh; position: relative; }
+    video { width: 100%; height: 100%; object-fit: cover; position: absolute; z-index: 1; }
+    canvas { width: 100%; height: 100%; position: absolute; z-index: 2; pointer-events: none; }
+    #bar {
+      position: absolute; top: 10px; left: 10px; z-index: 10;
+      background: rgba(0, 0, 0, 0.7); padding: 8px; border-radius: 4px; border: 1px solid #00ff00;
+    }
+    input, button { background: #111; color: #00ff00; border: 1px solid #00ff00; padding: 6px; font-family: monospace; }
+  </style>
+</head>
+<body>
+
+  <div id="bar">
+    <input type="text" id="targetId" value="plane77" style="width: 100px;">
+    <button id="connectBtn">CONNECT</button>
+  </div>
+
+  <video id="planeVideo" autoplay playsinline muted></video>
+  <canvas id="hudCanvas"></canvas>
+
+  <script>
+    const video = document.getElementById('planeVideo');
+    const canvas = document.getElementById('hudCanvas');
+    const ctx = canvas.getContext('2d');
+    let tele = { roll: 0, pitch: 0 };
+    let peer = null;
+
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // Draw Only Clean Artificial Horizon
+    function drawHUD() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const cx = canvas.width / 2;
+      const cy = canvas.height / 2;
+
+      // 1. Moving Horizon Line (Roll + Pitch)
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate((tele.roll * Math.PI) / 180);
+
+      const pitchPx = tele.pitch * 6; // 6px per degree pitch shift
+
+      ctx.strokeStyle = '#00ff00';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(-220, pitchPx);
+      ctx.lineTo(220, pitchPx);
+      ctx.stroke();
+      ctx.restore();
+
+      // 2. Fixed Center Reticle / Aircraft Crosshair
+      ctx.strokeStyle = '#ffff00';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(cx - 30, cy); ctx.lineTo(cx - 10, cy);
+      ctx.moveTo(cx + 10, cy); ctx.lineTo(cx + 30, cy);
+      ctx.moveTo(cx, cy - 8); ctx.lineTo(cx, cy + 8);
+      ctx.stroke();
+
+      requestAnimationFrame(drawHUD);
+    }
+    drawHUD();
+
+    // Connect without asking for any receiver permissions
+    document.getElementById('connectBtn').addEventListener('click', () => {
+      const target = document.getElementById('targetId').value.trim().toLowerCase();
+      if (!target) return;
+
+      if (peer) peer.destroy();
+      peer = new Peer();
+
+      peer.on('open', () => {
+        // 1. Receive Telemetry
+        const conn = peer.connect(target);
+        conn.on('data', (data) => {
+          tele = data;
+        });
+
+        // 2. Receive Video Stream using dummy local canvas track
+        const dummyCanvas = document.createElement('canvas');
+        dummyCanvas.width = 1;
+        dummyCanvas.height = 1;
+        const dummyStream = dummyCanvas.captureStream(1);
+
+        const call = peer.call(target, dummyStream);
+        call.on('stream', (remoteStream) => {
+          video.srcObject = remoteStream;
+          document.getElementById('bar').style.opacity = '0.3';
+        });
+      });
+    });
+  </script>
+</body>
+</html>
