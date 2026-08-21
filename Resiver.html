@@ -3,220 +3,131 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>FPV Jet Cockpit HUD</title>
+  <title>FPV Receiver Horizon</title>
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #000; overflow: hidden; width: 100vw; height: 100vh; font-family: 'Consolas', monospace; color: #00ff66; }
-    #hud-container { position: relative; width: 100vw; height: 100vh; }
+    body { background: #000; overflow: hidden; width: 100vw; height: 100vh; position: relative; }
     video { width: 100%; height: 100%; object-fit: cover; position: absolute; z-index: 1; }
     canvas { width: 100%; height: 100%; position: absolute; z-index: 2; pointer-events: none; }
-    #top-bar {
+    #bar {
       position: absolute; top: 10px; left: 10px; z-index: 10;
-      background: rgba(10, 15, 20, 0.85); padding: 6px 10px; border-radius: 4px; border: 1px solid rgba(0, 255, 102, 0.4);
+      background: rgba(0, 0, 0, 0.7); padding: 8px; border-radius: 4px; border: 1px solid #00ff00;
     }
-    input, button { background: #000; color: #00ff66; border: 1px solid #00ff66; padding: 4px 8px; font-family: monospace; font-size: 13px; }
-    button { cursor: pointer; font-weight: bold; }
+    input, button { background: #111; color: #00ff00; border: 1px solid #00ff00; padding: 6px; font-family: monospace; }
   </style>
 </head>
 <body>
 
-<div id="hud-container">
-  <div id="top-bar">
-    <span>CALLSIGN: </span>
-    <input type="text" id="targetId" value="plane77" style="width: 90px;">
-    <button id="connectBtn">CONNECT FPV</button>
-    <span id="connStatus" style="margin-left: 8px; color: #ffeb3b; font-size: 12px;">DISCONNECTED</span>
+  <div id="bar">
+    <input type="text" id="targetId" value="plane77" style="width: 100px;">
+    <button id="connectBtn">CONNECT</button>
   </div>
 
   <video id="planeVideo" autoplay playsinline muted></video>
   <canvas id="hudCanvas"></canvas>
-</div>
 
-<script>
-  const video = document.getElementById('planeVideo');
-  const canvas = document.getElementById('hudCanvas');
-  const ctx = canvas.getContext('2d');
-  const statusSpan = document.getElementById('connStatus');
+  <script>
+    const video = document.getElementById('planeVideo');
+    const canvas = document.getElementById('hudCanvas');
+    const ctx = canvas.getContext('2d');
+    let tele = { roll: 0, pitch: 0 };
+    let peer = null;
 
-  let tele = { roll: 0, pitch: 0, alt: 0, speed: 0, heading: 0, lat: 0, lon: 0, batt: 100, homeDist: 0, homeBearing: 0 };
-  let peer = null;
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
 
-  function resize() {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-  }
-  window.addEventListener('resize', resize);
-  resize();
+    // Draw Horizon with Pitch Degree Ladders (10, 20, 30 deg)
+    function drawHUD() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const cx = canvas.width / 2;
+      const cy = canvas.height / 2;
 
-  // Advanced Jet HUD Render Loop
-  function drawHUD() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    const cx = canvas.width / 2;
-    const cy = canvas.height / 2;
-    const HUD_COLOR = 'rgba(0, 255, 102, 0.9)';
-    const SHADOW_COLOR = 'rgba(0, 0, 0, 0.8)';
+      // 1. Moving Horizon Line + Pitch Ladder
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate((tele.roll * Math.PI) / 180);
 
-    ctx.strokeStyle = HUD_COLOR;
-    ctx.fillStyle = HUD_COLOR;
-    ctx.lineWidth = 2;
+      const pitchPx = tele.pitch * 6; // 6px per degree
 
-    // 1. TOP COMPASS TAPE
-    ctx.save();
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-    ctx.fillRect(cx - 120, 15, 240, 30);
-    ctx.strokeRect(cx - 120, 15, 240, 30);
-    ctx.fillStyle = HUD_COLOR;
-    ctx.font = 'bold 12px monospace';
-    ctx.textAlign = 'center';
-    
-    // Heading Marks
-    let hdg = Math.round(tele.heading);
-    ctx.fillText(`▲ ${hdg}°`, cx, 35);
-    ctx.fillText(`${(hdg - 20 + 360)%360}`, cx - 60, 35);
-    ctx.fillText(`${(hdg + 20)%360}`, cx + 60, 35);
-    ctx.restore();
-
-    // 2. ARTIFICIAL HORIZON & PITCH LADDER
-    ctx.save();
-    ctx.translate(cx, cy);
-    ctx.rotate((tele.roll * Math.PI) / 180);
-
-    const pitchOffset = tele.pitch * 6;
-
-    // Main Horizon Line
-    ctx.beginPath();
-    ctx.moveTo(-160, pitchOffset);
-    ctx.lineTo(160, pitchOffset);
-    ctx.stroke();
-
-    // Pitch rungs (10 deg intervals)
-    for (let p = -30; p <= 30; p += 10) {
-      if (p === 0) continue;
-      let y = pitchOffset - (p * 6);
-      let len = 40;
+      // Main Center Horizon Line
+      ctx.strokeStyle = '#00ff00';
+      ctx.lineWidth = 2.5;
       ctx.beginPath();
-      ctx.moveTo(-len, y); ctx.lineTo(-len + 15, y);
-      ctx.moveTo(len - 15, y); ctx.lineTo(len, y);
+      ctx.moveTo(-180, pitchPx);
+      ctx.lineTo(180, pitchPx);
       ctx.stroke();
 
-      ctx.font = '10px monospace';
-      ctx.fillText(p, len + 5, y + 3);
-      ctx.fillText(p, -len - 15, y + 3);
-    }
-    ctx.restore();
+      // Pitch Degree Marks (+30, +20, +10, -10, -20, -30)
+      ctx.lineWidth = 1.5;
+      for (let p = -30; p <= 30; p += 10) {
+        if (p === 0) continue; // 0 degree is main horizon
+        let y = pitchPx - (p * 6);
+        let len = 35;
 
-    // 3. CENTER AIRPLANE RETICLE
-    ctx.strokeStyle = '#ffff00';
-    ctx.beginPath();
-    ctx.moveTo(cx - 25, cy); ctx.lineTo(cx - 8, cy);
-    ctx.moveTo(cx + 8, cy); ctx.lineTo(cx + 25, cy);
-    ctx.moveTo(cx, cy - 8); ctx.lineTo(cx, cy + 8);
-    ctx.stroke();
+        ctx.beginPath();
+        // Left notch
+        ctx.moveTo(-len, y); ctx.lineTo(-len + 12, y);
+        // Right notch
+        ctx.moveTo(len - 12, y); ctx.lineTo(len, y);
+        ctx.stroke();
 
-    // 4. HOME DIRECTION ARROW (Points toward Home)
-    if (tele.homeDist > 0) {
-      ctx.save();
-      ctx.translate(cx, cy + 80);
-      let arrowAngle = ((tele.homeBearing - tele.heading) * Math.PI) / 180;
-      ctx.rotate(arrowAngle);
-      ctx.fillStyle = '#ffff00';
-      ctx.beginPath();
-      ctx.moveTo(0, -15); ctx.lineTo(10, 10); ctx.lineTo(0, 5); ctx.lineTo(-10, 10);
-      ctx.closePath();
-      ctx.fill();
+        // Degree Numbers
+        ctx.fillStyle = '#00ff00';
+        ctx.font = '11px monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText(p + '°', len + 6, y + 4);
+        ctx.textAlign = 'right';
+        ctx.fillText(p + '°', -len - 6, y + 4);
+      }
+
       ctx.restore();
 
-      ctx.fillStyle = '#ffff00';
-      ctx.font = 'bold 12px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(`HOME: ${(tele.homeDist / 1000).toFixed(2)} km`, cx, cy + 115);
+      // 2. Fixed Center Aircraft Reticle (Yellow Crosshair)
+      ctx.strokeStyle = '#ffff00';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(cx - 30, cy); ctx.lineTo(cx - 10, cy);
+      ctx.moveTo(cx + 10, cy); ctx.lineTo(cx + 30, cy);
+      ctx.moveTo(cx, cy - 8); ctx.lineTo(cx, cy + 8);
+      ctx.stroke();
+
+      requestAnimationFrame(drawHUD);
     }
+    drawHUD();
 
-    // 5. LEFT SPEED TAPE
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-    ctx.fillRect(25, cy - 80, 80, 160);
-    ctx.strokeStyle = HUD_COLOR;
-    ctx.strokeRect(25, cy - 80, 80, 160);
+    // Connect logic with dummy stream
+    document.getElementById('connectBtn').addEventListener('click', () => {
+      const target = document.getElementById('targetId').value.trim().toLowerCase();
+      if (!target) return;
 
-    ctx.fillStyle = HUD_COLOR;
-    ctx.font = 'bold 11px monospace';
-    ctx.textAlign = 'left';
-    ctx.fillText("AIRSPEED", 32, cy - 60);
-    ctx.font = 'bold 22px monospace';
-    ctx.fillText(tele.speed.toFixed(0), 35, cy + 8);
-    ctx.font = '10px monospace';
-    ctx.fillText("KM/H", 35, cy + 28);
+      if (peer) peer.destroy();
+      peer = new Peer();
 
-    // 6. RIGHT ALTITUDE TAPE
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-    ctx.fillRect(canvas.width - 105, cy - 80, 80, 160);
-    ctx.strokeRect(canvas.width - 105, cy - 80, 80, 160);
+      peer.on('open', () => {
+        // 1. Receive Roll/Pitch
+        const conn = peer.connect(target);
+        conn.on('data', (data) => {
+          tele = data;
+        });
 
-    ctx.fillStyle = HUD_COLOR;
-    ctx.font = 'bold 11px monospace';
-    ctx.fillText("ALTITUDE", canvas.width - 98, cy - 60);
-    ctx.font = 'bold 22px monospace';
-    ctx.fillText(tele.alt.toFixed(0), canvas.width - 95, cy + 8);
-    ctx.font = '10px monospace';
-    ctx.fillText("METERS", canvas.width - 95, cy + 28);
+        // 2. Receive Video stream without asking permissions
+        const dummyCanvas = document.createElement('canvas');
+        dummyCanvas.width = 1;
+        dummyCanvas.height = 1;
+        const dummyStream = dummyCanvas.captureStream(1);
 
-    // 7. BOTTOM AVIONICS DATA BAR
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    ctx.fillRect(0, canvas.height - 35, canvas.width, 35);
-    ctx.strokeStyle = HUD_COLOR;
-    ctx.beginPath(); ctx.moveTo(0, canvas.height - 35); ctx.lineTo(canvas.width, canvas.height - 35); ctx.stroke();
-
-    ctx.fillStyle = HUD_COLOR;
-    ctx.font = '12px monospace';
-    ctx.textAlign = 'left';
-    ctx.fillText(`ROLL: ${tele.roll.toFixed(1)}°  PITCH: ${tele.pitch.toFixed(1)}°`, 20, canvas.height - 12);
-    ctx.fillText(`BATTERY: ${tele.batt}%`, cx - 50, canvas.height - 12);
-    ctx.fillText(`GPS: ${tele.lat.toFixed(4)}, ${tele.lon.toFixed(4)}`, canvas.width - 240, canvas.height - 12);
-
-    requestAnimationFrame(drawHUD);
-  }
-  drawHUD();
-
-  // Connect to plane
-  document.getElementById('connectBtn').addEventListener('click', () => {
-    const target = document.getElementById('targetId').value.trim().toLowerCase();
-    if (!target) return;
-
-    statusSpan.innerText = "CONNECTING...";
-    statusSpan.style.color = '#ffeb3b';
-
-    if (peer) peer.destroy();
-    peer = new Peer();
-
-    peer.on('open', () => {
-      // 1. Data channel
-      const conn = peer.connect(target);
-      conn.on('open', () => {
-        statusSpan.innerText = "TELEMETRY LINK OK";
-        statusSpan.style.color = '#00ff66';
-      });
-      conn.on('data', (data) => {
-        tele = data;
-      });
-
-      // 2. Video Stream with zero receiver permission
-      const dummyCanvas = document.createElement('canvas');
-      dummyCanvas.width = 1; dummyCanvas.height = 1;
-      const call = peer.call(target, dummyCanvas.captureStream(1));
-
-      call.on('stream', (remoteStream) => {
-        video.srcObject = remoteStream;
-        statusSpan.innerText = "FPV STREAM ACTIVE";
-        document.getElementById('top-bar').style.opacity = '0.35';
+        const call = peer.call(target, dummyStream);
+        call.on('stream', (remoteStream) => {
+          video.srcObject = remoteStream;
+          document.getElementById('bar').style.opacity = '0.3';
+        });
       });
     });
-
-    peer.on('error', (err) => {
-      statusSpan.innerText = "LINK ERROR: " + err.type;
-      statusSpan.style.color = '#ff4444';
-    });
-  });
-</script>
+  </script>
 </body>
 </html>
