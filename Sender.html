@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Plane Sender (Headless)</title>
+  <title>Plane Sender (Camera Selector)</title>
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
   <style>
     * { box-sizing: border-box; }
     body { background: #000; color: #00ff00; font-family: monospace; padding: 20px; text-align: center; }
     h2 { font-size: 18px; margin-bottom: 20px; }
-    input, button { width: 100%; max-width: 400px; padding: 14px; margin: 8px auto; display: block; background: #111; color: #00ff00; border: 1px solid #00ff00; font-size: 16px; border-radius: 6px; font-family: monospace; }
+    input, select, button { width: 100%; max-width: 400px; padding: 14px; margin: 8px auto; display: block; background: #111; color: #00ff00; border: 1px solid #00ff00; font-size: 16px; border-radius: 6px; font-family: monospace; }
     button { cursor: pointer; font-weight: bold; background: #002b00; }
     #stopBtn { background: #3a0d0d; color: #ff5555; border-color: #ff5555; display: none; }
     #status { margin-top: 20px; color: #ffeb3b; font-size: 15px; font-weight: bold; }
@@ -17,9 +17,16 @@
 </head>
 <body>
 
-  <h2>✈️ Plane Transmitter (No Preview)</h2>
+  <h2>✈️ Plane Transmitter</h2>
   
   <input type="text" id="planeId" value="plane77" placeholder="Plane CallSign">
+  
+  <!-- Camera Selection Dropdown -->
+  <select id="cameraSelect">
+    <option value="environment">📷 Back Camera (Main)</option>
+    <option value="user">🤳 Front Camera (Selfie)</option>
+  </select>
+
   <button id="startBtn">▶️ START TRANSMITTER</button>
   <button id="stopBtn">⏹️ STOP TRANSMITTER</button>
 
@@ -35,6 +42,7 @@
     const stopBtn = document.getElementById('stopBtn');
     const statusDiv = document.getElementById('status');
     const planeInput = document.getElementById('planeId');
+    const cameraSelect = document.getElementById('cameraSelect');
 
     // Gyro / Accelerometer
     window.addEventListener('deviceorientation', (e) => {
@@ -53,14 +61,18 @@
       }
     });
 
-    async function getCameraStream() {
+    async function getCameraStream(facingMode) {
       try {
         return await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' }, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } },
+          video: { facingMode: { exact: facingMode }, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } },
           audio: false
         });
       } catch (err) {
-        return await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        // Fallback with ideal if exact fails
+        return await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: facingMode }, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } },
+          audio: false
+        });
       }
     }
 
@@ -69,10 +81,11 @@
       const planeId = planeInput.value.trim().toLowerCase();
       if (!planeId) return alert('Enter Plane ID');
 
-      statusDiv.innerText = "Accessing Camera...";
+      const selectedCamera = cameraSelect.value;
+      statusDiv.innerText = `Accessing ${selectedCamera === 'environment' ? 'Back' : 'Front'} Camera...`;
 
       try {
-        localStream = await getCameraStream();
+        localStream = await getCameraStream(selectedCamera);
 
         peer = new Peer(planeId);
 
@@ -82,6 +95,7 @@
           startBtn.style.display = 'none';
           stopBtn.style.display = 'block';
           planeInput.disabled = true;
+          cameraSelect.disabled = true;
         });
 
         peer.on('connection', (conn) => {
@@ -129,6 +143,7 @@
       stopBtn.style.display = 'none';
       startBtn.style.display = 'block';
       planeInput.disabled = false;
+      cameraSelect.disabled = false;
     });
   </script>
 </body>
