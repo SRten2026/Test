@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Plane Sender (Compass Enabled)</title>
+  <title>Plane Sender (Built-in Sensor)</title>
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
   <style>
     * { box-sizing: border-box; }
@@ -43,13 +43,18 @@
     const planeInput = document.getElementById('planeId');
     const cameraSelect = document.getElementById('cameraSelect');
 
-    // Orientation + Compass Tracking
-    window.addEventListener('deviceorientation', (e) => {
+    // Phone Internal Hardware Compass & Gyro
+    function handleOrientation(e) {
       let gamma = e.gamma || 0; // Roll
       let beta = e.beta || 0;   // Pitch
-      let alpha = e.alpha || 0; // Compass Heading (0-360°)
+      
+      let heading = 0;
+      if (e.webkitCompassHeading) {
+        heading = e.webkitCompassHeading;
+      } else if (e.alpha !== null) {
+        heading = (360 - e.alpha) % 360; // Built-in Magnetometer heading
+      }
 
-      // Phone orientation adjustment
       if (window.orientation === 90) {
         tele.roll = -beta;
         tele.pitch = -gamma;
@@ -61,9 +66,14 @@
         tele.pitch = beta;
       }
 
-      // Compass Heading
-      tele.heading = Math.round(360 - alpha) % 360;
-    });
+      tele.heading = Math.round(heading);
+    }
+
+    if ('ondeviceorientationabsolute' in window) {
+      window.addEventListener('deviceorientationabsolute', handleOrientation);
+    } else {
+      window.addEventListener('deviceorientation', handleOrientation);
+    }
 
     async function getCameraStream(facingMode) {
       try {
@@ -93,7 +103,7 @@
         peer = new Peer(planeId);
 
         peer.on('open', (id) => {
-          statusDiv.innerText = `Online: [${id}] - Ready!`;
+          statusDiv.innerText = `Online: [${id}] - Streaming Active!`;
           statusDiv.style.color = '#00ff00';
           startBtn.style.display = 'none';
           stopBtn.style.display = 'block';
@@ -110,7 +120,7 @@
 
         peer.on('call', (call) => {
           call.answer(localStream);
-          statusDiv.innerText = "Streaming Video Live (Background)";
+          statusDiv.innerText = "Streaming Video + Compass Live";
         });
 
         peer.on('error', (err) => {
