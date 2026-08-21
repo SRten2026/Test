@@ -41,7 +41,6 @@
     window.addEventListener('resize', resize);
     resize();
 
-    // Draw Horizon with Pitch Degree Ladders (10, 20, 30 deg)
     function drawHUD() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       const cx = canvas.width / 2;
@@ -52,47 +51,44 @@
       ctx.translate(cx, cy);
       ctx.rotate((tele.roll * Math.PI) / 180);
 
-      const pitchPx = tele.pitch * 6; // 6px per degree
+      const pitchPx = tele.pitch * 5; // 5px per degree shift
 
-      // Main Center Horizon Line
+      // Main Horizon
       ctx.strokeStyle = '#00ff00';
       ctx.lineWidth = 2.5;
       ctx.beginPath();
-      ctx.moveTo(-180, pitchPx);
-      ctx.lineTo(180, pitchPx);
+      ctx.moveTo(-160, pitchPx);
+      ctx.lineTo(160, pitchPx);
       ctx.stroke();
 
-      // Pitch Degree Marks (+30, +20, +10, -10, -20, -30)
+      // Pitch Ladders (±10°, 20°, 30°)
       ctx.lineWidth = 1.5;
       for (let p = -30; p <= 30; p += 10) {
-        if (p === 0) continue; // 0 degree is main horizon
-        let y = pitchPx - (p * 6);
-        let len = 35;
+        if (p === 0) continue;
+        let y = pitchPx - (p * 5);
+        let len = 30;
 
         ctx.beginPath();
-        // Left notch
-        ctx.moveTo(-len, y); ctx.lineTo(-len + 12, y);
-        // Right notch
-        ctx.moveTo(len - 12, y); ctx.lineTo(len, y);
+        ctx.moveTo(-len, y); ctx.lineTo(-len + 10, y);
+        ctx.moveTo(len - 10, y); ctx.lineTo(len, y);
         ctx.stroke();
 
-        // Degree Numbers
         ctx.fillStyle = '#00ff00';
         ctx.font = '11px monospace';
         ctx.textAlign = 'left';
-        ctx.fillText(p + '°', len + 6, y + 4);
+        ctx.fillText(p + '°', len + 5, y + 4);
         ctx.textAlign = 'right';
-        ctx.fillText(p + '°', -len - 6, y + 4);
+        ctx.fillText(p + '°', -len - 5, y + 4);
       }
 
       ctx.restore();
 
-      // 2. Fixed Center Aircraft Reticle (Yellow Crosshair)
+      // 2. Fixed Center Reticle
       ctx.strokeStyle = '#ffff00';
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(cx - 30, cy); ctx.lineTo(cx - 10, cy);
-      ctx.moveTo(cx + 10, cy); ctx.lineTo(cx + 30, cy);
+      ctx.moveTo(cx - 25, cy); ctx.lineTo(cx - 8, cy);
+      ctx.moveTo(cx + 8, cy); ctx.lineTo(cx + 25, cy);
       ctx.moveTo(cx, cy - 8); ctx.lineTo(cx, cy + 8);
       ctx.stroke();
 
@@ -100,7 +96,6 @@
     }
     drawHUD();
 
-    // Connect logic with dummy stream
     document.getElementById('connectBtn').addEventListener('click', () => {
       const target = document.getElementById('targetId').value.trim().toLowerCase();
       if (!target) return;
@@ -109,13 +104,11 @@
       peer = new Peer();
 
       peer.on('open', () => {
-        // 1. Receive Roll/Pitch
         const conn = peer.connect(target);
         conn.on('data', (data) => {
           tele = data;
         });
 
-        // 2. Receive Video stream without asking permissions
         const dummyCanvas = document.createElement('canvas');
         dummyCanvas.width = 1;
         dummyCanvas.height = 1;
