@@ -8,31 +8,50 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { background: #000; overflow: hidden; width: 100vw; height: 100vh; position: relative; }
-    video { width: 100%; height: 100%; object-fit: cover; position: absolute; z-index: 1; }
+    #video-wrapper {
+      position: absolute; width: 100%; height: 100%;
+      display: flex; justify-content: center; align-items: center; z-index: 1;
+    }
+    video {
+      width: 100%; height: 100%; object-fit: cover;
+      transition: transform 0.2s ease;
+    }
     canvas { width: 100%; height: 100%; position: absolute; z-index: 2; pointer-events: none; }
     #bar {
       position: absolute; top: 10px; left: 10px; z-index: 10;
-      background: rgba(0, 0, 0, 0.7); padding: 8px; border-radius: 4px; border: 1px solid #00ff00;
+      background: rgba(0, 0, 0, 0.75); padding: 6px 10px; border-radius: 4px; border: 1px solid #00ff00;
+      display: flex; gap: 6px; align-items: center;
     }
-    input, button { background: #111; color: #00ff00; border: 1px solid #00ff00; padding: 6px; font-family: monospace; }
+    input, button { background: #111; color: #00ff00; border: 1px solid #00ff00; padding: 5px 8px; font-family: monospace; font-size: 12px; }
+    button { cursor: pointer; font-weight: bold; }
+    .btn-active { background: #00ff00 !important; color: #000 !important; }
   </style>
 </head>
 <body>
 
   <div id="bar">
-    <input type="text" id="targetId" value="plane77" style="width: 100px;">
+    <input type="text" id="targetId" value="plane77" style="width: 75px;">
     <button id="connectBtn">CONNECT</button>
+    <button id="rotateBtn" title="Rotate Camera">🔄 0°</button>
+    <button id="invertBtn" title="Invert Pitch">↕️ INV: OFF</button>
   </div>
 
-  <video id="planeVideo" autoplay playsinline muted></video>
+  <div id="video-wrapper">
+    <video id="planeVideo" autoplay playsinline muted></video>
+  </div>
   <canvas id="hudCanvas"></canvas>
 
   <script>
     const video = document.getElementById('planeVideo');
     const canvas = document.getElementById('hudCanvas');
     const ctx = canvas.getContext('2d');
+    const rotateBtn = document.getElementById('rotateBtn');
+    const invertBtn = document.getElementById('invertBtn');
+
     let tele = { roll: 0, pitch: 0 };
     let peer = null;
+    let rotationAngle = 0;
+    let isPitchInverted = false;
 
     function resize() {
       canvas.width = window.innerWidth;
@@ -41,54 +60,78 @@
     window.addEventListener('resize', resize);
     resize();
 
+    // 1. Rotate Camera Feed on Receiver
+    rotateBtn.addEventListener('click', () => {
+      rotationAngle = (rotationAngle + 90) % 360;
+      rotateBtn.innerText = `🔄 ${rotationAngle}°`;
+      video.style.transform = `rotate(${rotationAngle}deg)`;
+      
+      // Adjust aspect ratio scaling if rotated 90 or 270 deg
+      if (rotationAngle === 90 || rotationAngle === 270) {
+        video.style.width = '100vh';
+        video.style.height = '100vw';
+      } else {
+        video.style.width = '100%';
+        video.style.height = '100%';
+      }
+    });
+
+    // 2. Invert Pitch Logic
+    invertBtn.addEventListener('click', () => {
+      isPitchInverted = !isPitchInverted;
+      invertBtn.innerText = isPitchInverted ? "↕️ INV: ON" : "↕️ INV: OFF";
+      invertBtn.classList.toggle('btn-active', isPitchInverted);
+    });
+
+    // Draw Horizon HUD
     function drawHUD() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       const cx = canvas.width / 2;
       const cy = canvas.height / 2;
 
-      // 1. Moving Horizon Line + Pitch Ladder
       ctx.save();
       ctx.translate(cx, cy);
       ctx.rotate((tele.roll * Math.PI) / 180);
 
-      const pitchPx = tele.pitch * 5; // 5px per degree shift
+      // Pitch multiplier with Invert check
+      let currentPitch = isPitchInverted ? -tele.pitch : tele.pitch;
+      const pitchPx = currentPitch * 6;
 
-      // Main Horizon
+      // Main Horizon Line
       ctx.strokeStyle = '#00ff00';
       ctx.lineWidth = 2.5;
       ctx.beginPath();
-      ctx.moveTo(-160, pitchPx);
-      ctx.lineTo(160, pitchPx);
+      ctx.moveTo(-180, pitchPx);
+      ctx.lineTo(180, pitchPx);
       ctx.stroke();
 
       // Pitch Ladders (±10°, 20°, 30°)
       ctx.lineWidth = 1.5;
       for (let p = -30; p <= 30; p += 10) {
         if (p === 0) continue;
-        let y = pitchPx - (p * 5);
-        let len = 30;
+        let y = pitchPx - (p * 6);
+        let len = 35;
 
         ctx.beginPath();
-        ctx.moveTo(-len, y); ctx.lineTo(-len + 10, y);
-        ctx.moveTo(len - 10, y); ctx.lineTo(len, y);
+        ctx.moveTo(-len, y); ctx.lineTo(-len + 12, y);
+        ctx.moveTo(len - 12, y); ctx.lineTo(len, y);
         ctx.stroke();
 
         ctx.fillStyle = '#00ff00';
         ctx.font = '11px monospace';
         ctx.textAlign = 'left';
-        ctx.fillText(p + '°', len + 5, y + 4);
+        ctx.fillText(p + '°', len + 6, y + 4);
         ctx.textAlign = 'right';
-        ctx.fillText(p + '°', -len - 5, y + 4);
+        ctx.fillText(p + '°', -len - 6, y + 4);
       }
-
       ctx.restore();
 
-      // 2. Fixed Center Reticle
+      // Center Fixed Reticle
       ctx.strokeStyle = '#ffff00';
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(cx - 25, cy); ctx.lineTo(cx - 8, cy);
-      ctx.moveTo(cx + 8, cy); ctx.lineTo(cx + 25, cy);
+      ctx.moveTo(cx - 30, cy); ctx.lineTo(cx - 10, cy);
+      ctx.moveTo(cx + 10, cy); ctx.lineTo(cx + 30, cy);
       ctx.moveTo(cx, cy - 8); ctx.lineTo(cx, cy + 8);
       ctx.stroke();
 
@@ -96,6 +139,7 @@
     }
     drawHUD();
 
+    // Connect logic
     document.getElementById('connectBtn').addEventListener('click', () => {
       const target = document.getElementById('targetId').value.trim().toLowerCase();
       if (!target) return;
@@ -110,14 +154,12 @@
         });
 
         const dummyCanvas = document.createElement('canvas');
-        dummyCanvas.width = 1;
-        dummyCanvas.height = 1;
-        const dummyStream = dummyCanvas.captureStream(1);
+        dummyCanvas.width = 1; dummyCanvas.height = 1;
+        const call = peer.call(target, dummyCanvas.captureStream(1));
 
-        const call = peer.call(target, dummyStream);
         call.on('stream', (remoteStream) => {
           video.srcObject = remoteStream;
-          document.getElementById('bar').style.opacity = '0.3';
+          document.getElementById('bar').style.opacity = '0.35';
         });
       });
     });
