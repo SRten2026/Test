@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>FPV Receiver Horizon</title>
+  <title>FPV Receiver with PUBG Compass</title>
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -48,7 +48,7 @@
     const rotateBtn = document.getElementById('rotateBtn');
     const invertBtn = document.getElementById('invertBtn');
 
-    let tele = { roll: 0, pitch: 0 };
+    let tele = { roll: 0, pitch: 0, heading: 0 };
     let peer = null;
     let rotationAngle = 0;
     let isPitchInverted = false;
@@ -60,13 +60,11 @@
     window.addEventListener('resize', resize);
     resize();
 
-    // 1. Rotate Camera Feed on Receiver
     rotateBtn.addEventListener('click', () => {
       rotationAngle = (rotationAngle + 90) % 360;
       rotateBtn.innerText = `🔄 ${rotationAngle}°`;
       video.style.transform = `rotate(${rotationAngle}deg)`;
       
-      // Adjust aspect ratio scaling if rotated 90 or 270 deg
       if (rotationAngle === 90 || rotationAngle === 270) {
         video.style.width = '100vh';
         video.style.height = '100vw';
@@ -76,28 +74,92 @@
       }
     });
 
-    // 2. Invert Pitch Logic
     invertBtn.addEventListener('click', () => {
       isPitchInverted = !isPitchInverted;
       invertBtn.innerText = isPitchInverted ? "↕️ INV: ON" : "↕️ INV: OFF";
       invertBtn.classList.toggle('btn-active', isPitchInverted);
     });
 
-    // Draw Horizon HUD
+    // Draw HUD + PUBG Style Top Compass
     function drawHUD() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       const cx = canvas.width / 2;
       const cy = canvas.height / 2;
 
+      // --- 1. PUBG STYLE TOP COMPASS ---
+      const compWidth = 300;
+      const compX = cx - compWidth / 2;
+      const compY = 15;
+
+      // Compass Background Box
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+      ctx.fillRect(compX, compY, compWidth, 26);
+      ctx.strokeStyle = '#00ff00';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(compX, compY, compWidth, 26);
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(compX, compY, compWidth, 26);
+      ctx.clip(); // Keep drawing inside the box
+
+      let currentHeading = tele.heading || 0; // Degrees (0 to 360)
+      
+      // Draw degree ticks & cardinal points (N, E, S, W)
+      const directions = [
+        { label: 'N', deg: 0 },
+        { label: 'NE', deg: 45 },
+        { label: 'E', deg: 90 },
+        { label: 'SE', deg: 135 },
+        { label: 'S', deg: 180 },
+        { label: 'SW', deg: 225 },
+        { label: 'W', deg: 270 },
+        { label: 'NW', deg: 315 },
+        { label: 'N', deg: 360 }
+      ];
+
+      ctx.font = 'bold 11px monospace';
+      ctx.textAlign = 'center';
+
+      directions.forEach(d => {
+        // Calculate pixel position relative to current heading
+        let diff = d.deg - currentHeading;
+        // Wrap around 360
+        while (diff < -180) diff += 360;
+        while (diff > 180) diff -= 360;
+
+        let xPos = cx + (diff * (compWidth / 90)); // 90 degrees visible span across the 300px box
+
+        if (xPos >= compX && xPos <= compX + compWidth) {
+          ctx.fillStyle = (d.label === 'N' && (d.deg === 0 || d.deg === 360)) ? '#ff5555' : '#00ff00';
+          
+          // Draw marker tick
+          ctx.fillRect(xPos - 1, compY + 16, 2, 8);
+          
+          // Draw text label
+          ctx.fillText(d.label, xPos, compY + 13);
+        }
+      });
+
+      ctx.restore();
+
+      // Center Indicator triangle for Compass
+      ctx.fillStyle = '#ffff00';
+      ctx.beginPath();
+      ctx.moveTo(cx, compY + 26);
+      ctx.lineTo(cx - 5, compY + 32);
+      ctx.lineTo(cx + 5, compY + 32);
+      ctx.fill();
+
+
+      // --- 2. ARTIFICIAL HORIZON & PITCH LADDER ---
       ctx.save();
       ctx.translate(cx, cy);
       ctx.rotate((tele.roll * Math.PI) / 180);
 
-      // Pitch multiplier with Invert check
       let currentPitch = isPitchInverted ? -tele.pitch : tele.pitch;
       const pitchPx = currentPitch * 6;
 
-      // Main Horizon Line
       ctx.strokeStyle = '#00ff00';
       ctx.lineWidth = 2.5;
       ctx.beginPath();
@@ -105,7 +167,6 @@
       ctx.lineTo(180, pitchPx);
       ctx.stroke();
 
-      // Pitch Ladders (±10°, 20°, 30°)
       ctx.lineWidth = 1.5;
       for (let p = -30; p <= 30; p += 10) {
         if (p === 0) continue;
@@ -126,7 +187,7 @@
       }
       ctx.restore();
 
-      // Center Fixed Reticle
+      // --- 3. CENTER RETICLE ---
       ctx.strokeStyle = '#ffff00';
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -150,7 +211,7 @@
       peer.on('open', () => {
         const conn = peer.connect(target);
         conn.on('data', (data) => {
-          tele = data;
+          tele = data; // Receives roll, pitch, and heading smoothly
         });
 
         const dummyCanvas = document.createElement('canvas');
