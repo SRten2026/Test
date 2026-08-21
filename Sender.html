@@ -3,28 +3,27 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Plane Sender</title>
+  <title>Plane Sender (Headless)</title>
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
   <style>
-    body { background: #000; color: #0f0; font-family: monospace; padding: 20px; }
-    input, button { width: 100%; padding: 12px; margin: 8px 0; background: #222; color: #0f0; border: 1px solid #0f0; font-size: 16px; border-radius: 4px; }
-    button { cursor: pointer; font-weight: bold; }
+    * { box-sizing: border-box; }
+    body { background: #000; color: #00ff00; font-family: monospace; padding: 20px; text-align: center; }
+    h2 { font-size: 18px; margin-bottom: 20px; }
+    input, button { width: 100%; max-width: 400px; padding: 14px; margin: 8px auto; display: block; background: #111; color: #00ff00; border: 1px solid #00ff00; font-size: 16px; border-radius: 6px; font-family: monospace; }
+    button { cursor: pointer; font-weight: bold; background: #002b00; }
     #stopBtn { background: #3a0d0d; color: #ff5555; border-color: #ff5555; display: none; }
-    #status { margin-top: 15px; color: #ffeb3b; font-size: 14px; }
+    #status { margin-top: 20px; color: #ffeb3b; font-size: 15px; font-weight: bold; }
   </style>
 </head>
 <body>
 
-  <h2>✈️ Plane Transmitter</h2>
-  <label>CallSign / Room ID:</label>
-  <input type="text" id="planeId" value="plane77">
+  <h2>✈️ Plane Transmitter (No Preview)</h2>
   
-  <button id="startBtn">START CAMERA & TRANSMIT</button>
+  <input type="text" id="planeId" value="plane77" placeholder="Plane CallSign">
+  <button id="startBtn">▶️ START TRANSMITTER</button>
   <button id="stopBtn">⏹️ STOP TRANSMITTER</button>
 
-  <div id="status">Status: Idle</div>
-
-  <video id="preview" autoplay playsinline muted style="width: 100%; height: 180px; object-fit: cover; margin-top: 10px; border: 1px solid #333;"></video>
+  <div id="status">Status: Standby</div>
 
   <script>
     let peer = null;
@@ -35,8 +34,9 @@
     const startBtn = document.getElementById('startBtn');
     const stopBtn = document.getElementById('stopBtn');
     const statusDiv = document.getElementById('status');
-    const preview = document.getElementById('preview');
+    const planeInput = document.getElementById('planeId');
 
+    // Gyro / Accelerometer
     window.addEventListener('deviceorientation', (e) => {
       let gamma = e.gamma || 0;
       let beta = e.beta || 0;
@@ -64,25 +64,24 @@
       }
     }
 
-    // 1. START TRANSMITTER
+    // START
     startBtn.addEventListener('click', async () => {
-      const planeId = document.getElementById('planeId').value.trim().toLowerCase();
+      const planeId = planeInput.value.trim().toLowerCase();
       if (!planeId) return alert('Enter Plane ID');
 
-      statusDiv.innerText = "Starting Camera...";
+      statusDiv.innerText = "Accessing Camera...";
 
       try {
         localStream = await getCameraStream();
-        preview.srcObject = localStream;
 
         peer = new Peer(planeId);
 
         peer.on('open', (id) => {
-          statusDiv.innerText = `Online: [${id}] - Camera Active & Ready!`;
-          statusDiv.style.color = '#0f0';
+          statusDiv.innerText = `Online: [${id}] - Ready!`;
+          statusDiv.style.color = '#00ff00';
           startBtn.style.display = 'none';
           stopBtn.style.display = 'block';
-          document.getElementById('planeId').disabled = true;
+          planeInput.disabled = true;
         });
 
         peer.on('connection', (conn) => {
@@ -94,7 +93,7 @@
 
         peer.on('call', (call) => {
           call.answer(localStream);
-          statusDiv.innerText = "Streaming Video Live!";
+          statusDiv.innerText = "Streaming Video Live (Background)";
         });
 
         peer.on('error', (err) => {
@@ -108,33 +107,28 @@
       }
     });
 
-    // 2. STOP TRANSMITTER
+    // STOP
     stopBtn.addEventListener('click', () => {
-      // Stop Camera Tracks
       if (localStream) {
         localStream.getTracks().forEach(track => track.stop());
         localStream = null;
       }
-      preview.srcObject = null;
 
-      // Stop Telemetry Interval
       if (dataInterval) {
         clearInterval(dataInterval);
         dataInterval = null;
       }
 
-      // Destroy Peer Connection
       if (peer) {
         peer.destroy();
         peer = null;
       }
 
-      // Reset UI
-      statusDiv.innerText = "Transmitter Stopped (Offline)";
+      statusDiv.innerText = "Transmitter Offline";
       statusDiv.style.color = '#ffeb3b';
       stopBtn.style.display = 'none';
       startBtn.style.display = 'block';
-      document.getElementById('planeId').disabled = false;
+      planeInput.disabled = false;
     });
   </script>
 </body>
