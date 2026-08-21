@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Plane Sender (Camera Selector)</title>
+  <title>Plane Sender (Compass Enabled)</title>
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
   <style>
     * { box-sizing: border-box; }
@@ -21,7 +21,6 @@
   
   <input type="text" id="planeId" value="plane77" placeholder="Plane CallSign">
   
-  <!-- Camera Selection Dropdown -->
   <select id="cameraSelect">
     <option value="environment">📷 Back Camera (Main)</option>
     <option value="user">🤳 Front Camera (Selfie)</option>
@@ -36,7 +35,7 @@
     let peer = null;
     let localStream = null;
     let dataInterval = null;
-    let tele = { roll: 0, pitch: 0 };
+    let tele = { roll: 0, pitch: 0, heading: 0 };
 
     const startBtn = document.getElementById('startBtn');
     const stopBtn = document.getElementById('stopBtn');
@@ -44,11 +43,13 @@
     const planeInput = document.getElementById('planeId');
     const cameraSelect = document.getElementById('cameraSelect');
 
-    // Gyro / Accelerometer
+    // Orientation + Compass Tracking
     window.addEventListener('deviceorientation', (e) => {
-      let gamma = e.gamma || 0;
-      let beta = e.beta || 0;
+      let gamma = e.gamma || 0; // Roll
+      let beta = e.beta || 0;   // Pitch
+      let alpha = e.alpha || 0; // Compass Heading (0-360°)
 
+      // Phone orientation adjustment
       if (window.orientation === 90) {
         tele.roll = -beta;
         tele.pitch = -gamma;
@@ -59,6 +60,9 @@
         tele.roll = gamma;
         tele.pitch = beta;
       }
+
+      // Compass Heading
+      tele.heading = Math.round(360 - alpha) % 360;
     });
 
     async function getCameraStream(facingMode) {
@@ -68,7 +72,6 @@
           audio: false
         });
       } catch (err) {
-        // Fallback with ideal if exact fails
         return await navigator.mediaDevices.getUserMedia({
           video: { facingMode: { ideal: facingMode }, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } },
           audio: false
