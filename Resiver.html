@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>FPV Receiver with PUBG Compass</title>
+  <title>FPV Receiver with Full Degree Compass</title>
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -60,6 +60,7 @@
     window.addEventListener('resize', resize);
     resize();
 
+    // 1. Rotate Camera Feed
     rotateBtn.addEventListener('click', () => {
       rotationAngle = (rotationAngle + 90) % 360;
       rotateBtn.innerText = `🔄 ${rotationAngle}°`;
@@ -74,85 +75,101 @@
       }
     });
 
+    // 2. Invert Pitch Logic
     invertBtn.addEventListener('click', () => {
       isPitchInverted = !isPitchInverted;
       invertBtn.innerText = isPitchInverted ? "↕️ INV: ON" : "↕️ INV: OFF";
       invertBtn.classList.toggle('btn-active', isPitchInverted);
     });
 
-    // Draw HUD + PUBG Style Top Compass
+    // Helper for Compass Direction Labels
+    function getDirectionLabel(deg) {
+      if (deg === 0 || deg === 360) return 'N';
+      if (deg === 45) return 'NE';
+      if (deg === 90) return 'E';
+      if (deg === 135) return 'SE';
+      if (deg === 180) return 'S';
+      if (deg === 225) return 'SW';
+      if (deg === 270) return 'W';
+      if (deg === 315) return 'NW';
+      return deg.toString(); // Shows degrees like 15, 30, 60, 75, etc.
+    }
+
+    // Draw HUD Canvas
     function drawHUD() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       const cx = canvas.width / 2;
       const cy = canvas.height / 2;
 
-      // --- 1. PUBG STYLE TOP COMPASS ---
-      const compWidth = 300;
+      // ==========================================
+      // 1. FULL DEGREES COMPASS TAPE (PUBG STYLE)
+      // ==========================================
+      const compWidth = 340;
       const compX = cx - compWidth / 2;
-      const compY = 15;
+      const compY = 16;
+      const compH = 32;
+      const fovDeg = 90; // Visible degrees window across compass width
+      const pxPerDeg = compWidth / fovDeg;
 
-      // Compass Background Box
+      // Compass Box Background
       ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
-      ctx.fillRect(compX, compY, compWidth, 26);
+      ctx.fillRect(compX, compY, compWidth, compH);
       ctx.strokeStyle = '#00ff00';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(compX, compY, compWidth, 26);
+      ctx.lineWidth = 1.2;
+      ctx.strokeRect(compX, compY, compWidth, compH);
+
+      // Exact Heading Badge on Top
+      ctx.fillStyle = '#00ff00';
+      ctx.font = 'bold 11px monospace';
+      ctx.textAlign = 'center';
+      let currentHdg = (tele.heading || 0);
+      ctx.fillText(`HDG ${currentHdg.toString().padStart(3, '0')}°`, cx, compY - 4);
 
       ctx.save();
       ctx.beginPath();
-      ctx.rect(compX, compY, compWidth, 26);
-      ctx.clip(); // Keep drawing inside the box
+      ctx.rect(compX, compY, compWidth, compH);
+      ctx.clip(); // Mask outside the compass box
 
-      let currentHeading = tele.heading || 0; // Degrees (0 to 360)
-      
-      // Draw degree ticks & cardinal points (N, E, S, W)
-      const directions = [
-        { label: 'N', deg: 0 },
-        { label: 'NE', deg: 45 },
-        { label: 'E', deg: 90 },
-        { label: 'SE', deg: 135 },
-        { label: 'S', deg: 180 },
-        { label: 'SW', deg: 225 },
-        { label: 'W', deg: 270 },
-        { label: 'NW', deg: 315 },
-        { label: 'N', deg: 360 }
-      ];
-
-      ctx.font = 'bold 11px monospace';
-      ctx.textAlign = 'center';
-
-      directions.forEach(d => {
-        // Calculate pixel position relative to current heading
-        let diff = d.deg - currentHeading;
-        // Wrap around 360
+      // Draw Marks from 0 to 360 at every 5 / 15 degrees
+      for (let deg = 0; deg < 360; deg += 5) {
+        let diff = deg - currentHdg;
         while (diff < -180) diff += 360;
         while (diff > 180) diff -= 360;
 
-        let xPos = cx + (diff * (compWidth / 90)); // 90 degrees visible span across the 300px box
+        let xPos = cx + (diff * pxPerDeg);
 
-        if (xPos >= compX && xPos <= compX + compWidth) {
-          ctx.fillStyle = (d.label === 'N' && (d.deg === 0 || d.deg === 360)) ? '#ff5555' : '#00ff00';
-          
-          // Draw marker tick
-          ctx.fillRect(xPos - 1, compY + 16, 2, 8);
-          
-          // Draw text label
-          ctx.fillText(d.label, xPos, compY + 13);
+        if (xPos >= compX - 20 && xPos <= compX + compWidth + 20) {
+          const isCardinal = (deg % 45 === 0);
+          const isMajorTick = (deg % 15 === 0);
+
+          if (isCardinal || isMajorTick) {
+            // Draw Major Tick & Text
+            let label = getDirectionLabel(deg);
+            ctx.fillStyle = (label === 'N') ? '#ff4444' : '#00ff00';
+            ctx.fillRect(xPos - 1, compY + compH - 10, 2, 10);
+
+            ctx.font = isCardinal ? 'bold 11px monospace' : '9px monospace';
+            ctx.fillText(label, xPos, compY + 14);
+          } else {
+            // Draw Minor 5-deg Tick
+            ctx.fillStyle = 'rgba(0, 255, 0, 0.5)';
+            ctx.fillRect(xPos - 0.5, compY + compH - 5, 1, 5);
+          }
         }
-      });
-
+      }
       ctx.restore();
 
-      // Center Indicator triangle for Compass
+      // Center Heading Indicator Pointer (Yellow Arrow)
       ctx.fillStyle = '#ffff00';
       ctx.beginPath();
-      ctx.moveTo(cx, compY + 26);
-      ctx.lineTo(cx - 5, compY + 32);
-      ctx.lineTo(cx + 5, compY + 32);
+      ctx.moveTo(cx, compY + compH);
+      ctx.lineTo(cx - 5, compY + compH + 7);
+      ctx.lineTo(cx + 5, compY + compH + 7);
       ctx.fill();
 
-
-      // --- 2. ARTIFICIAL HORIZON & PITCH LADDER ---
+      // ==========================================
+      // 2. ARTIFICIAL HORIZON & PITCH LADDER
+      // ==========================================
       ctx.save();
       ctx.translate(cx, cy);
       ctx.rotate((tele.roll * Math.PI) / 180);
@@ -160,6 +177,7 @@
       let currentPitch = isPitchInverted ? -tele.pitch : tele.pitch;
       const pitchPx = currentPitch * 6;
 
+      // Horizon Line
       ctx.strokeStyle = '#00ff00';
       ctx.lineWidth = 2.5;
       ctx.beginPath();
@@ -167,6 +185,7 @@
       ctx.lineTo(180, pitchPx);
       ctx.stroke();
 
+      // Pitch Ladders (±10°, 20°, 30°)
       ctx.lineWidth = 1.5;
       for (let p = -30; p <= 30; p += 10) {
         if (p === 0) continue;
@@ -187,7 +206,9 @@
       }
       ctx.restore();
 
-      // --- 3. CENTER RETICLE ---
+      // ==========================================
+      // 3. FIXED RETICLE (YELLOW CROSSHAIR)
+      // ==========================================
       ctx.strokeStyle = '#ffff00';
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -211,7 +232,7 @@
       peer.on('open', () => {
         const conn = peer.connect(target);
         conn.on('data', (data) => {
-          tele = data; // Receives roll, pitch, and heading smoothly
+          tele = data;
         });
 
         const dummyCanvas = document.createElement('canvas');
