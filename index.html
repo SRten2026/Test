@@ -2,236 +2,171 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Plane Sender (Auto Flight Computer)</title>
-  
-  <!-- PWA Manifest Link -->
-  <link rel="manifest" href="manifest.json">
-  <meta name="theme-color" content="#000000">
-
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Easy FPV - Drone Sender</title>
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
   <style>
-    * { box-sizing: border-box; }
-    body { background: #000; color: #00ff00; font-family: monospace; padding: 20px; text-align: center; }
-    h2 { font-size: 18px; margin-bottom: 20px; }
-    input, select, button { width: 100%; max-width: 400px; padding: 14px; margin: 8px auto; display: block; background: #111; color: #00ff00; border: 1px solid #00ff00; font-size: 16px; border-radius: 6px; font-family: monospace; }
-    button { cursor: pointer; font-weight: bold; background: #002b00; }
-    #stopBtn { background: #3a0d0d; color: #ff5555; border-color: #ff5555; display: none; }
-    #status { margin-top: 20px; color: #ffeb3b; font-size: 15px; font-weight: bold; word-break: break-all; }
-    #telemetryView { margin-top: 15px; font-size: 13px; color: #88ff88; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #000; color: #00ff00; font-family: monospace; overflow: hidden; width: 100vw; height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+    #video { width: 100%; height: 100%; object-fit: cover; position: absolute; top: 0; left: 0; z-index: 1; }
+    #overlay { position: absolute; z-index: 2; top: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 10px; border: 1px solid #00ff00; border-radius: 4px; font-size: 13px; line-height: 1.6; }
+    #countdown-box { position: absolute; z-index: 10; font-size: 40px; font-weight: bold; background: rgba(0,0,0,0.85); padding: 20px 40px; border: 2px solid #00ff00; border-radius: 8px; text-align: center; }
   </style>
 </head>
 <body>
 
-  <h2>✈️ Plane Transmitter (Auto Boot)</h2>
-  
-  <input type="text" id="planeId" value="plane77" placeholder="Plane CallSign">
-  
-  <select id="cameraSelect">
-    <!-- Default front/external for headless board -->
-    <option value="user">🤳 Front / USB Camera (Default)</option>
-    <option value="environment">📷 Back Camera</option>
-  </select>
+  <video id="video" autoplay playsinline muted></video>
 
-  <button id="startBtn">▶️ START TRANSMITTER</button>
-  <button id="stopBtn">⏹️ STOP TRANSMITTER</button>
+  <div id="countdown-box">
+    STARTING IN <span id="timer">3</span>s
+  </div>
 
-  <div id="status">Status: Initializing Auto-Start...</div>
-  <div id="telemetryView">Roll: 0 | Pitch: 0 | Head: 0 | Lat: 0 | Lon: 0</div>
+  <div id="overlay">
+    <div>DEVICE: <b>plane77</b></div>
+    <div>STATUS: <span id="status">INITIALIZING...</span></div>
+    <div>BATTERY: <span id="disp-battery">--%</span></div>
+    <div>HDG: <span id="disp-heading">--°</span></div>
+    <div>GPS: <span id="disp-gps">SEARCHING...</span></div>
+  </div>
 
   <script>
+    const video = document.getElementById('video');
+    const statusText = document.getElementById('status');
+    const timerText = document.getElementById('timer');
+    const countdownBox = document.getElementById('countdown-box');
+    const dispBattery = document.getElementById('disp-battery');
+    const dispHeading = document.getElementById('disp-heading');
+    const dispGps = document.getElementById('disp-gps');
+
     let peer = null;
     let localStream = null;
-    let dataInterval = null;
-    let wakeLock = null;
+    let activeConn = null;
 
-    // Telemetry payload including IMU and GPS
-    let tele = { 
-      roll: 0, 
-      pitch: 0, 
+    let teleData = {
       heading: 0,
       lat: 0,
       lon: 0,
       alt: 0,
-      speed: 0
+      battery: 0,
+      charging: false
     };
 
-    const startBtn = document.getElementById('startBtn');
-    const stopBtn = document.getElementById('stopBtn');
-    const statusDiv = document.getElementById('status');
-    const planeInput = document.getElementById('planeId');
-    const cameraSelect = document.getElementById('cameraSelect');
-    const teleView = document.getElementById('telemetryView');
-
-    // 1. Prevent Sleep Mode (Wake Lock API)
-    async function requestWakeLock() {
-      try {
-        if ('wakeLock' in navigator) {
-          wakeLock = await navigator.wakeLock.request('screen');
+    // 1. ব্যাটারি মনিটরিং ইঞ্জিন
+    if (navigator.getBattery) {
+      navigator.getBattery().then((battery) => {
+        function updateBattery() {
+          teleData.battery = Math.round(battery.level * 100);
+          teleData.charging = battery.charging;
+          dispBattery.innerText = `${teleData.battery}% ${teleData.charging ? '⚡' : ''}`;
         }
-      } catch (err) {
-        console.log('WakeLock error:', err);
-      }
+        updateBattery();
+        battery.addEventListener('levelchange', updateBattery);
+        battery.addEventListener('chargingchange', updateBattery);
+      });
     }
 
-    // 2. Gyroscope & Compass Handling
-    function handleOrientation(e) {
-      let gamma = e.gamma || 0; // Roll
-      let beta = e.beta || 0;   // Pitch
-      let heading = 0;
-
-      if (e.webkitCompassHeading) {
-        heading = e.webkitCompassHeading;
-      } else if (e.alpha !== null) {
-        heading = (360 - e.alpha) % 360;
+    // 2. কম্পাস / হেডিং সেন্সর
+    window.addEventListener('deviceorientation', (event) => {
+      let hdg = 0;
+      if (event.webkitCompassHeading) {
+        hdg = event.webkitCompassHeading;
+      } else if (event.alpha !== null) {
+        hdg = 360 - event.alpha;
       }
+      teleData.heading = Math.round(hdg);
+      dispHeading.innerText = `${teleData.heading}°`;
+    });
 
-      if (window.orientation === 90) {
-        tele.roll = Math.round(-beta);
-        tele.pitch = Math.round(-gamma);
-      } else if (window.orientation === -90) {
-        tele.roll = Math.round(beta);
-        tele.pitch = Math.round(gamma);
-      } else {
-        tele.roll = Math.round(gamma);
-        tele.pitch = Math.round(beta);
-      }
-
-      tele.heading = Math.round(heading);
-      updateTelemetryUI();
-    }
-
-    if ('ondeviceorientationabsolute' in window) {
-      window.addEventListener('deviceorientationabsolute', handleOrientation);
-    } else {
-      window.addEventListener('deviceorientation', handleOrientation);
-    }
-
-    // 3. GPS Location Tracking
-    if ('geolocation' in navigator) {
+    // 3. জিপিএস ট্র্যাকিং
+    if (navigator.geolocation) {
       navigator.geolocation.watchPosition(
         (pos) => {
-          tele.lat = Number(pos.coords.latitude.toFixed(6));
-          tele.lon = Number(pos.coords.longitude.toFixed(6));
-          tele.alt = Math.round(pos.coords.altitude || 0);
-          tele.speed = Math.round((pos.coords.speed || 0) * 3.6); // km/h
-          updateTelemetryUI();
+          teleData.lat = pos.coords.latitude;
+          teleData.lon = pos.coords.longitude;
+          teleData.alt = pos.coords.altitude || 0;
+          dispGps.innerText = `${teleData.lat.toFixed(4)}, ${teleData.lon.toFixed(4)}`;
         },
-        (err) => console.log("GPS Err:", err),
-        { enableHighAccuracy: true, maximumAge: 0 }
+        (err) => {
+          dispGps.innerText = "NO FIX";
+        },
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
       );
     }
 
-    function updateTelemetryUI() {
-      teleView.innerText = `R: ${tele.roll}° | P: ${tele.pitch}° | H: ${tele.heading}° | GPS: ${tele.lat}, ${tele.lon}`;
-    }
+    // 4. ৩ সেকেন্ডের স্বয়ংক্রিয় স্টার্টআপ কাউন্টডাউন
+    let count = 3;
+    const interval = setInterval(() => {
+      count--;
+      if (count > 0) {
+        timerText.innerText = count;
+      } else {
+        clearInterval(interval);
+        countdownBox.style.display = 'none';
+        initCameraAndPeer();
+      }
+    }, 1000);
 
-    // 4. Camera Stream Picker (Fallback to any active camera)
-    async function getCameraStream(facingMode) {
-      const constraints = {
-        video: { 
-          facingMode: facingMode,
-          width: { ideal: 640 }, 
-          height: { ideal: 480 }, 
-          frameRate: { ideal: 30 } 
-        },
-        audio: false
-      };
-
+    // 5. ক্যামেরা এবং PeerJS কানেকশন শুরু
+    async function initCameraAndPeer() {
+      statusText.innerText = "STARTING CAMERA...";
       try {
-        return await navigator.mediaDevices.getUserMedia(constraints);
+        localStream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: 'environment', // পেছনের ক্যামেরা
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            frameRate: { ideal: 30 }
+          },
+          audio: false
+        });
+        video.srcObject = localStream;
+        statusText.innerText = "CONNECTING BROKER...";
+        setupPeer();
       } catch (err) {
-        // If preferred camera fails, pick any available camera (USB / Secondary)
-        return await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        statusText.innerText = "CAMERA ERROR: " + err.message;
       }
     }
 
-    // 5. Start Transmission
-    async function startTransmitter() {
-      const planeId = planeInput.value.trim().toLowerCase();
-      if (!planeId) return;
+    function setupPeer() {
+      // নির্দিষ্ট ফিক্সড আইডি: plane77
+      peer = new Peer('plane77');
 
-      const selectedCamera = cameraSelect.value;
-      statusDiv.innerText = `Activating Camera (${selectedCamera})...`;
+      peer.on('open', (id) => {
+        statusText.innerText = "READY (plane77)";
+      });
 
-      try {
-        await requestWakeLock();
-        localStream = await getCameraStream(selectedCamera);
+      // রিসিভার থেকে কল আসলে লাইভ ভিডিও পাঠানো
+      peer.on('call', (call) => {
+        call.answer(localStream);
+        statusText.innerText = "STREAMING LIVE";
+      });
 
-        peer = new Peer(planeId);
+      // টেলিমেট্রি ডাটা চ্যানেল হ্যান্ডলিং
+      peer.on('connection', (conn) => {
+        activeConn = conn;
+        statusText.innerText = "CLIENT LINKED";
 
-        peer.on('open', (id) => {
-          statusDiv.innerText = `🟢 ONLINE: [${id}] - Live!`;
-          statusDiv.style.color = '#00ff00';
-          startBtn.style.display = 'none';
-          stopBtn.style.display = 'block';
-          planeInput.disabled = true;
-          cameraSelect.disabled = true;
+        conn.on('close', () => {
+          activeConn = null;
+          statusText.innerText = "CLIENT DISCONNECTED";
         });
+      });
 
-        peer.on('connection', (conn) => {
-          if (dataInterval) clearInterval(dataInterval);
-          dataInterval = setInterval(() => {
-            if (conn && conn.open) conn.send(tele);
-          }, 40); // 25Hz telemetry stream
-        });
-
-        peer.on('call', (call) => {
-          call.answer(localStream);
-          statusDiv.innerText = "Streaming Video + Telemetry Live";
-        });
-
-        peer.on('error', (err) => {
-          statusDiv.innerText = "Peer Error: " + err.type;
-          statusDiv.style.color = '#ff4444';
-        });
-
-      } catch (err) {
-        statusDiv.innerText = "Camera/Init Error: " + err.message;
-        statusDiv.style.color = '#ff4444';
-      }
-    }
-
-    startBtn.addEventListener('click', startTransmitter);
-
-    // 6. Stop Transmission
-    stopBtn.addEventListener('click', () => {
-      if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
-        localStream = null;
-      }
-      if (dataInterval) {
-        clearInterval(dataInterval);
-        dataInterval = null;
-      }
-      if (peer) {
-        peer.destroy();
-        peer = null;
-      }
-      if (wakeLock) {
-        wakeLock.release().then(() => wakeLock = null);
-      }
-
-      statusDiv.innerText = "Transmitter Offline";
-      statusDiv.style.color = '#ffeb3b';
-      stopBtn.style.display = 'none';
-      startBtn.style.display = 'block';
-      planeInput.disabled = false;
-      cameraSelect.disabled = false;
-    });
-
-    // 7. AUTO-START ON BOOT / LOAD (Starts in 3 seconds automatically)
-    window.addEventListener('DOMContentLoaded', () => {
-      let count = 3;
-      const countdown = setInterval(() => {
-        statusDiv.innerText = `Auto-starting in ${count}s... (Click STOP to cancel)`;
-        count--;
-        if (count < 0) {
-          clearInterval(countdown);
-          startTransmitter();
+      peer.on('error', (err) => {
+        statusText.innerText = "PEER ERROR: " + err.type;
+        // আইডি অলরেডি থাকলে আবার রিকানেক্ট চেষ্টা
+        if (err.type === 'unavailable-id') {
+          setTimeout(setupPeer, 3000);
         }
-      }, 1000);
-    });
+      });
+    }
+
+    // প্রতি 100ms পর পর রিসিভারে লাইভ টেলিমেট্রি ও ব্যাটারি পাঠানো
+    setInterval(() => {
+      if (activeConn && activeConn.open) {
+        activeConn.send(teleData);
+      }
+    }, 100);
   </script>
 </body>
 </html>
