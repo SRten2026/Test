@@ -3,7 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Plane Sender (Built-in Sensor)</title>
+  <title>Plane Sender (Auto Flight Computer)</title>
+  
+  <!-- PWA Manifest Link -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#000000">
+
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
   <style>
     * { box-sizing: border-box; }
@@ -12,61 +17,88 @@
     input, select, button { width: 100%; max-width: 400px; padding: 14px; margin: 8px auto; display: block; background: #111; color: #00ff00; border: 1px solid #00ff00; font-size: 16px; border-radius: 6px; font-family: monospace; }
     button { cursor: pointer; font-weight: bold; background: #002b00; }
     #stopBtn { background: #3a0d0d; color: #ff5555; border-color: #ff5555; display: none; }
-    #status { margin-top: 20px; color: #ffeb3b; font-size: 15px; font-weight: bold; }
+    #status { margin-top: 20px; color: #ffeb3b; font-size: 15px; font-weight: bold; word-break: break-all; }
+    #telemetryView { margin-top: 15px; font-size: 13px; color: #88ff88; }
   </style>
 </head>
 <body>
 
-  <h2>✈️ Plane Transmitter</h2>
+  <h2>✈️ Plane Transmitter (Auto Boot)</h2>
   
   <input type="text" id="planeId" value="plane77" placeholder="Plane CallSign">
   
   <select id="cameraSelect">
-    <option value="environment">📷 Back Camera (Main)</option>
-    <option value="user">🤳 Front Camera (Selfie)</option>
+    <!-- Default front/external for headless board -->
+    <option value="user">🤳 Front / USB Camera (Default)</option>
+    <option value="environment">📷 Back Camera</option>
   </select>
 
   <button id="startBtn">▶️ START TRANSMITTER</button>
   <button id="stopBtn">⏹️ STOP TRANSMITTER</button>
 
-  <div id="status">Status: Standby</div>
+  <div id="status">Status: Initializing Auto-Start...</div>
+  <div id="telemetryView">Roll: 0 | Pitch: 0 | Head: 0 | Lat: 0 | Lon: 0</div>
 
   <script>
     let peer = null;
     let localStream = null;
     let dataInterval = null;
-    let tele = { roll: 0, pitch: 0, heading: 0 };
+    let wakeLock = null;
+
+    // Telemetry payload including IMU and GPS
+    let tele = { 
+      roll: 0, 
+      pitch: 0, 
+      heading: 0,
+      lat: 0,
+      lon: 0,
+      alt: 0,
+      speed: 0
+    };
 
     const startBtn = document.getElementById('startBtn');
     const stopBtn = document.getElementById('stopBtn');
     const statusDiv = document.getElementById('status');
     const planeInput = document.getElementById('planeId');
     const cameraSelect = document.getElementById('cameraSelect');
+    const teleView = document.getElementById('telemetryView');
 
-    // Phone Internal Hardware Compass & Gyro
+    // 1. Prevent Sleep Mode (Wake Lock API)
+    async function requestWakeLock() {
+      try {
+        if ('wakeLock' in navigator) {
+          wakeLock = await navigator.wakeLock.request('screen');
+        }
+      } catch (err) {
+        console.log('WakeLock error:', err);
+      }
+    }
+
+    // 2. Gyroscope & Compass Handling
     function handleOrientation(e) {
       let gamma = e.gamma || 0; // Roll
       let beta = e.beta || 0;   // Pitch
-      
       let heading = 0;
+
       if (e.webkitCompassHeading) {
         heading = e.webkitCompassHeading;
       } else if (e.alpha !== null) {
-        heading = (360 - e.alpha) % 360; // Built-in Magnetometer heading
+        heading = (360 - e.alpha) % 360;
       }
 
       if (window.orientation === 90) {
-        tele.roll = -beta;
-        tele.pitch = -gamma;
+        tele.roll = Math.round(-beta);
+        tele.pitch = Math.round(-gamma);
       } else if (window.orientation === -90) {
-        tele.roll = beta;
-        tele.pitch = gamma;
+        tele.roll = Math.round(beta);
+        tele.pitch = Math.round(gamma);
       } else {
-        tele.roll = gamma;
-        tele.pitch = beta;
+        tele.roll = Math.round(gamma);
+        tele.pitch = Math.round(beta);
       }
 
       tele.heading = Math.round(heading);
+      updateTelemetryUI();
     }
 
     if ('ondeviceorientationabsolute' in window) {
@@ -75,35 +107,61 @@
       window.addEventListener('deviceorientation', handleOrientation);
     }
 
+    // 3. GPS Location Tracking
+    if ('geolocation' in navigator) {
+      navigator.geolocation.watchPosition(
+        (pos) => {
+          tele.lat = Number(pos.coords.latitude.toFixed(6));
+          tele.lon = Number(pos.coords.longitude.toFixed(6));
+          tele.alt = Math.round(pos.coords.altitude || 0);
+          tele.speed = Math.round((pos.coords.speed || 0) * 3.6); // km/h
+          updateTelemetryUI();
+        },
+        (err) => console.log("GPS Err:", err),
+        { enableHighAccuracy: true, maximumAge: 0 }
+      );
+    }
+
+    function updateTelemetryUI() {
+      teleView.innerText = `R: ${tele.roll}° | P: ${tele.pitch}° | H: ${tele.heading}° | GPS: ${tele.lat}, ${tele.lon}`;
+    }
+
+    // 4. Camera Stream Picker (Fallback to any active camera)
     async function getCameraStream(facingMode) {
+      const constraints = {
+        video: { 
+          facingMode: facingMode,
+          width: { ideal: 640 }, 
+          height: { ideal: 480 }, 
+          frameRate: { ideal: 30 } 
+        },
+        audio: false
+      };
+
       try {
-        return await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { exact: facingMode }, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } },
-          audio: false
-        });
+        return await navigator.mediaDevices.getUserMedia(constraints);
       } catch (err) {
-        return await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: facingMode }, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } },
-          audio: false
-        });
+        // If preferred camera fails, pick any available camera (USB / Secondary)
+        return await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
       }
     }
 
-    // START
-    startBtn.addEventListener('click', async () => {
+    // 5. Start Transmission
+    async function startTransmitter() {
       const planeId = planeInput.value.trim().toLowerCase();
-      if (!planeId) return alert('Enter Plane ID');
+      if (!planeId) return;
 
       const selectedCamera = cameraSelect.value;
-      statusDiv.innerText = `Accessing ${selectedCamera === 'environment' ? 'Back' : 'Front'} Camera...`;
+      statusDiv.innerText = `Activating Camera (${selectedCamera})...`;
 
       try {
+        await requestWakeLock();
         localStream = await getCameraStream(selectedCamera);
 
         peer = new Peer(planeId);
 
         peer.on('open', (id) => {
-          statusDiv.innerText = `Online: [${id}] - Streaming Active!`;
+          statusDiv.innerText = `🟢 ONLINE: [${id}] - Live!`;
           statusDiv.style.color = '#00ff00';
           startBtn.style.display = 'none';
           stopBtn.style.display = 'block';
@@ -115,40 +173,43 @@
           if (dataInterval) clearInterval(dataInterval);
           dataInterval = setInterval(() => {
             if (conn && conn.open) conn.send(tele);
-          }, 33);
+          }, 40); // 25Hz telemetry stream
         });
 
         peer.on('call', (call) => {
           call.answer(localStream);
-          statusDiv.innerText = "Streaming Video + Compass Live";
+          statusDiv.innerText = "Streaming Video + Telemetry Live";
         });
 
         peer.on('error', (err) => {
-          statusDiv.innerText = "Error: " + err.type;
+          statusDiv.innerText = "Peer Error: " + err.type;
           statusDiv.style.color = '#ff4444';
         });
 
       } catch (err) {
-        statusDiv.innerText = "Error: " + err.message;
+        statusDiv.innerText = "Camera/Init Error: " + err.message;
         statusDiv.style.color = '#ff4444';
       }
-    });
+    }
 
-    // STOP
+    startBtn.addEventListener('click', startTransmitter);
+
+    // 6. Stop Transmission
     stopBtn.addEventListener('click', () => {
       if (localStream) {
         localStream.getTracks().forEach(track => track.stop());
         localStream = null;
       }
-
       if (dataInterval) {
         clearInterval(dataInterval);
         dataInterval = null;
       }
-
       if (peer) {
         peer.destroy();
         peer = null;
+      }
+      if (wakeLock) {
+        wakeLock.release().then(() => wakeLock = null);
       }
 
       statusDiv.innerText = "Transmitter Offline";
@@ -157,6 +218,19 @@
       startBtn.style.display = 'block';
       planeInput.disabled = false;
       cameraSelect.disabled = false;
+    });
+
+    // 7. AUTO-START ON BOOT / LOAD (Starts in 3 seconds automatically)
+    window.addEventListener('DOMContentLoaded', () => {
+      let count = 3;
+      const countdown = setInterval(() => {
+        statusDiv.innerText = `Auto-starting in ${count}s... (Click STOP to cancel)`;
+        count--;
+        if (count < 0) {
+          clearInterval(countdown);
+          startTransmitter();
+        }
+      }, 1000);
     });
   </script>
 </body>
