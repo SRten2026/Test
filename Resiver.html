@@ -3,16 +3,17 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>FPV Receiver with ArduPilot Style Mini-Map HUD</title>
+  <title>Drone FPV Receiver - Clean HUD</title>
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
   
-  <!-- Leaflet CSS & JS for Free High-Res Satellite Mini-Map -->
+  <!-- Leaflet CSS & JS for Satellite Mini-Map -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { background: #000; overflow: hidden; width: 100vw; height: 100vh; position: relative; font-family: monospace; }
+    
     #video-wrapper {
       position: absolute; width: 100%; height: 100%;
       display: flex; justify-content: center; align-items: center; z-index: 1;
@@ -21,21 +22,31 @@
       width: 100%; height: 100%; object-fit: cover;
       transition: transform 0.2s ease;
     }
-    canvas { width: 100%; height: 100%; position: absolute; z-index: 2; pointer-events: none; }
-    
-    /* Top Control Bar */
+
+    /* Minimal Top Bar */
     #bar {
       position: absolute; top: 10px; left: 10px; z-index: 10;
       background: rgba(0, 0, 0, 0.75); padding: 6px 10px; border-radius: 4px; border: 1px solid #00ff00;
-      display: flex; gap: 6px; align-items: center; transition: opacity 0.3s ease;
+      display: flex; gap: 8px; align-items: center; transition: opacity 0.3s ease;
     }
     #bar:hover { opacity: 1 !important; }
     input, button { background: #111; color: #00ff00; border: 1px solid #00ff00; padding: 5px 8px; font-family: monospace; font-size: 12px; }
     button { cursor: pointer; font-weight: bold; }
-    .btn-active { background: #00ff00 !important; color: #000 !important; }
-    #status-indicator { font-size: 11px; font-weight: bold; padding: 2px 6px; border-radius: 2px; }
+    
+    #status-indicator { font-size: 11px; font-weight: bold; padding: 3px 6px; border-radius: 2px; }
     .status-connected { color: #000; background: #00ff00; }
     .status-disconnected { color: #fff; background: #ff0000; }
+
+    /* Telemetry Info Overlay (Bottom Left) */
+    #telemetry-box {
+      position: absolute; bottom: 15px; left: 15px; z-index: 10;
+      background: rgba(0, 0, 0, 0.75); border: 1px solid #00ff00;
+      border-radius: 4px; padding: 10px 14px; min-width: 180px;
+      color: #00ff00; font-size: 13px; line-height: 1.6;
+      box-shadow: 0 0 10px rgba(0, 255, 0, 0.2);
+    }
+    .warn-battery { color: #ff3333 !important; font-weight: bold; animation: blink 1s infinite; }
+    @keyframes blink { 50% { opacity: 0.5; } }
 
     /* Mini-Map Floating Box (Bottom Right) */
     #map-container {
@@ -46,8 +57,7 @@
       background: #000; transition: width 0.3s, height 0.3s;
     }
     #map { width: 100%; height: 100%; }
-    
-    /* Custom Drone Icon on Map */
+
     .drone-marker {
       display: flex; justify-content: center; align-items: center;
       transition: transform 0.1s linear;
@@ -59,56 +69,52 @@
 </head>
 <body>
 
+  <!-- Minimal Top Controls -->
   <div id="bar">
     <input type="text" id="targetId" value="plane77" style="width: 75px;">
     <button id="connectBtn">CONNECT</button>
-    <button id="mountBtn" title="Mounting Position">📱 VERTICAL</button>
-    <button id="zeroBtn" title="Calibrate / Set Level Horizon">🎯 ZERO</button>
     <button id="rotateBtn" title="Rotate Camera">🔄 0°</button>
-    <button id="invertBtn" title="Invert Pitch">↕️ INV: OFF</button>
-    <button id="audioBtn" class="btn-active">🔊 AUDIO: ON</button>
     <button id="mapToggleBtn" title="Toggle Map Size">🗺️ MAP: S</button>
     <span id="status-indicator" class="status-disconnected">DISCONNECTED</span>
   </div>
 
+  <!-- Fullscreen FPV Video Feed -->
   <div id="video-wrapper">
     <video id="planeVideo" autoplay playsinline muted></video>
   </div>
-  <canvas id="hudCanvas"></canvas>
 
-  <!-- ArduPilot Style Mini-Map -->
+  <!-- Telemetry Data Panel -->
+  <div id="telemetry-box">
+    <div>BATTERY: <span id="tele-battery">--%</span></div>
+    <div>HEADING: <span id="tele-heading">--°</span></div>
+    <div>GPS LAT: <span id="tele-lat">--</span></div>
+    <div>GPS LON: <span id="tele-lon">--</span></div>
+    <div>ALT    : <span id="tele-alt">-- m</span></div>
+  </div>
+
+  <!-- ArduPilot Style Satellite Mini-Map -->
   <div id="map-container">
     <div id="map"></div>
   </div>
 
   <script>
     const video = document.getElementById('planeVideo');
-    const canvas = document.getElementById('hudCanvas');
-    const ctx = canvas.getContext('2d');
     const rotateBtn = document.getElementById('rotateBtn');
-    const invertBtn = document.getElementById('invertBtn');
-    const audioBtn = document.getElementById('audioBtn');
-    const mountBtn = document.getElementById('mountBtn');
-    const zeroBtn = document.getElementById('zeroBtn');
     const mapToggleBtn = document.getElementById('mapToggleBtn');
     const statusIndicator = document.getElementById('status-indicator');
     const mapContainer = document.getElementById('map-container');
 
-    let rawTele = { roll: 0, pitch: 0, heading: 0, lat: 0, lon: 0, alt: 0 };
-    let tele = { roll: 0, pitch: 0, heading: 0 };
-    let calOffsets = { pitch: 0, roll: 0 };
-    
-    const mountModes = ['VERTICAL', 'FLAT', 'LANDSCAPE'];
-    let currentMountIndex = 0;
+    const elBattery = document.getElementById('tele-battery');
+    const elHeading = document.getElementById('tele-heading');
+    const elLat = document.getElementById('tele-lat');
+    const elLon = document.getElementById('tele-lon');
+    const elAlt = document.getElementById('tele-alt');
 
+    let rawTele = { heading: 0, lat: 0, lon: 0, alt: 0, battery: 0, charging: false };
     let peer = null;
     let dataConn = null;
     let mediaCall = null;
     let rotationAngle = 0;
-    let isPitchInverted = false;
-    let audioAlertsEnabled = true;
-    let lastSpokenTime = 0;
-    let activeWarningText = "";
     let lastDataReceivedTime = 0;
     let reconnectTimer = null;
 
@@ -120,35 +126,32 @@
     let mapInitialized = false;
 
     function initMap() {
-      // Default initial view (India Center or 0,0)
       map = L.map('map', { zoomControl: false, attributionControl: false }).setView([22.5726, 88.3639], 16);
 
-      // High-Res Satellite View (Esri World Imagery)
+      // High-Res Satellite View
       L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
         maxZoom: 19
       }).addTo(map);
 
       // Drone Aircraft SVG Icon
       const droneSvg = `
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="#00ff00">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="#00ff00">
           <path d="M12 2L4 21l8-4 8 4L12 2z"/>
         </svg>`;
 
       const customIcon = L.divIcon({
         className: 'drone-marker',
         html: `<div id="drone-icon-wrapper">${droneSvg}</div>`,
-        iconSize: [28, 28],
-        iconAnchor: [14, 14]
+        iconSize: [26, 26],
+        iconAnchor: [13, 13]
       });
 
       droneMarker = L.marker([22.5726, 88.3639], { icon: customIcon }).addTo(map);
-
-      // Polyline for flight tracking (Yellow tail)
       flightPath = L.polyline([], { color: '#ffff00', weight: 2, opacity: 0.8 }).addTo(map);
     }
     initMap();
 
-    // Map Resize Toggle (Small to Big HUD Map)
+    // Map Resize Toggle
     mapToggleBtn.addEventListener('click', () => {
       isMapExpanded = !isMapExpanded;
       if (isMapExpanded) {
@@ -163,126 +166,55 @@
       setTimeout(() => { map.invalidateSize(); }, 350);
     });
 
-    // Update GPS and Heading on Map
-    function updateDroneMap() {
-      if (!rawTele.lat || !rawTele.lon) return;
+    // Update Telemetry Panel & Map
+    function updateHUD() {
+      const isSignalAlive = (Date.now() - lastDataReceivedTime < 3500);
 
-      const pos = [rawTele.lat, rawTele.lon];
+      if (!isSignalAlive && lastDataReceivedTime !== 0) {
+        statusIndicator.innerText = "NO TELEMETRY";
+        statusIndicator.className = "status-disconnected";
+      }
 
-      if (!mapInitialized) {
-        map.setView(pos, 17);
-        mapInitialized = true;
+      // 1. Update Telemetry Box
+      let batText = rawTele.battery ? `${rawTele.battery}%` : '--%';
+      if (rawTele.charging) batText += ' ⚡';
+      elBattery.innerText = batText;
+
+      if (rawTele.battery && rawTele.battery <= 20) {
+        elBattery.className = 'warn-battery';
       } else {
-        map.panTo(pos);
+        elBattery.className = '';
       }
 
-      droneMarker.setLatLng(pos);
-      flightPath.addLatLng(pos);
+      elHeading.innerText = `${Math.round(rawTele.heading || 0)}°`;
+      elLat.innerText = rawTele.lat ? rawTele.lat.toFixed(5) : '--';
+      elLon.innerText = rawTele.lon ? rawTele.lon.toFixed(5) : '--';
+      elAlt.innerText = rawTele.alt ? `${rawTele.alt.toFixed(1)} m` : '-- m';
 
-      // Rotate Drone Icon based on compass heading
-      const iconWrapper = document.getElementById('drone-icon-wrapper');
-      if (iconWrapper) {
-        let hdg = Math.round(tele.heading || 0);
-        iconWrapper.style.transform = `rotate(${hdg}deg)`;
-      }
-    }
+      // 2. Update Map Position & Drone Icon Heading
+      if (rawTele.lat && rawTele.lon) {
+        const pos = [rawTele.lat, rawTele.lon];
+        if (!mapInitialized) {
+          map.setView(pos, 17);
+          mapInitialized = true;
+        } else {
+          map.panTo(pos);
+        }
 
-    function resize() {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    }
-    window.addEventListener('resize', resize);
-    resize();
+        droneMarker.setLatLng(pos);
+        flightPath.addLatLng(pos);
 
-    // 1:1 Orientation Engine
-    function computeOrientedTelemetry() {
-      let r = rawTele.roll || 0;
-      let p = rawTele.pitch || 0;
-      let mode = mountModes[currentMountIndex];
-
-      let targetPitch = p;
-      let targetRoll = r;
-
-      if (mode === 'VERTICAL') {
-        targetPitch = p - 90;
-        targetRoll = r;
-      } else if (mode === 'LANDSCAPE') {
-        targetPitch = r;
-        targetRoll = -p;
+        const iconWrapper = document.getElementById('drone-icon-wrapper');
+        if (iconWrapper) {
+          iconWrapper.style.transform = `rotate(${Math.round(rawTele.heading || 0)}deg)`;
+        }
       }
 
-      targetPitch -= calOffsets.pitch;
-      targetRoll -= calOffsets.roll;
-
-      while (targetRoll > 180) targetRoll -= 360;
-      while (targetRoll < -180) targetRoll += 360;
-      while (targetPitch > 180) targetPitch -= 360;
-      while (targetPitch < -180) targetPitch += 360;
-
-      tele.pitch += (targetPitch - tele.pitch) * 0.35;
-      tele.roll += (targetRoll - tele.roll) * 0.35;
-      tele.heading = rawTele.heading || 0;
+      requestAnimationFrame(updateHUD);
     }
+    updateHUD();
 
-    mountBtn.addEventListener('click', () => {
-      currentMountIndex = (currentMountIndex + 1) % mountModes.length;
-      mountBtn.innerText = `📱 ${mountModes[currentMountIndex]}`;
-      calOffsets = { pitch: 0, roll: 0 };
-    });
-
-    zeroBtn.addEventListener('click', () => {
-      let r = rawTele.roll || 0;
-      let p = rawTele.pitch || 0;
-      let mode = mountModes[currentMountIndex];
-
-      let basePitch = p;
-      let baseRoll = r;
-      if (mode === 'VERTICAL') basePitch = p - 90;
-      if (mode === 'LANDSCAPE') { basePitch = r; baseRoll = -p; }
-
-      calOffsets.pitch = basePitch;
-      calOffsets.roll = baseRoll;
-      triggerVoiceAlert("Horizon Calibrated");
-    });
-
-    function triggerVoiceAlert(message) {
-      if (!audioAlertsEnabled) return;
-      const now = Date.now();
-      if (now - lastSpokenTime < 3500) return;
-
-      lastSpokenTime = now;
-      activeWarningText = message.toUpperCase();
-
-      const utterance = new SpeechSynthesisUtterance(message);
-      utterance.rate = 1.1;
-      utterance.pitch = 0.9;
-      utterance.volume = 1.0;
-      window.speechSynthesis.speak(utterance);
-
-      setTimeout(() => { activeWarningText = ""; }, 3000);
-    }
-
-    function evaluateFlightSafety() {
-      let roll = tele.roll || 0;
-      let pitch = isPitchInverted ? -(tele.pitch || 0) : (tele.pitch || 0);
-
-      if (roll > 45) {
-        triggerVoiceAlert("Bank Angle Right");
-      } else if (roll < -45) {
-        triggerVoiceAlert("Bank Angle Left");
-      } else if (pitch < -25) {
-        triggerVoiceAlert("Pull Up");
-      } else if (pitch > 35) {
-        triggerVoiceAlert("Caution Stall");
-      }
-    }
-
-    audioBtn.addEventListener('click', () => {
-      audioAlertsEnabled = !audioAlertsEnabled;
-      audioBtn.innerText = audioAlertsEnabled ? "🔊 AUDIO: ON" : "🔇 AUDIO: OFF";
-      audioBtn.classList.toggle('btn-active', audioAlertsEnabled);
-    });
-
+    // Rotate Camera Feed
     rotateBtn.addEventListener('click', () => {
       rotationAngle = (rotationAngle + 90) % 360;
       rotateBtn.innerText = `🔄 ${rotationAngle}°`;
@@ -297,189 +229,10 @@
       }
     });
 
-    invertBtn.addEventListener('click', () => {
-      isPitchInverted = !isPitchInverted;
-      invertBtn.innerText = isPitchInverted ? "↕️ INV: ON" : "↕️ INV: OFF";
-      invertBtn.classList.toggle('btn-active', isPitchInverted);
-    });
-
-    function getDirectionLabel(deg) {
-      if (deg === 0 || deg === 360) return 'N';
-      if (deg === 45) return 'NE';
-      if (deg === 90) return 'E';
-      if (deg === 135) return 'SE';
-      if (deg === 180) return 'S';
-      if (deg === 225) return 'SW';
-      if (deg === 270) return 'W';
-      if (deg === 315) return 'NW';
-      return deg.toString();
-    }
-
-    // Main Draw Function
-    function drawHUD() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      const cx = canvas.width / 2;
-      const cy = canvas.height / 2;
-      const isSignalAlive = (Date.now() - lastDataReceivedTime < 3000);
-
-      computeOrientedTelemetry();
-      updateDroneMap();
-
-      if (isSignalAlive) {
-        evaluateFlightSafety();
-      }
-
-      // 1. TOP COMPASS
-      const compWidth = 340;
-      const compX = cx - compWidth / 2;
-      const compY = 16;
-      const compH = 32;
-      const fovDeg = 90;
-      const pxPerDeg = compWidth / fovDeg;
-
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
-      ctx.fillRect(compX, compY, compWidth, compH);
-      ctx.strokeStyle = '#00ff00';
-      ctx.lineWidth = 1.2;
-      ctx.strokeRect(compX, compY, compWidth, compH);
-
-      ctx.fillStyle = '#00ff00';
-      ctx.font = 'bold 11px monospace';
-      ctx.textAlign = 'center';
-      let currentHdg = Math.round(tele.heading || 0);
-      ctx.fillText(`HDG ${currentHdg.toString().padStart(3, '0')}°`, cx, compY - 4);
-
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(compX, compY, compWidth, compH);
-      ctx.clip();
-
-      for (let deg = 0; deg < 360; deg += 5) {
-        let diff = deg - currentHdg;
-        while (diff < -180) diff += 360;
-        while (diff > 180) diff -= 360;
-
-        let xPos = cx + (diff * pxPerDeg);
-
-        if (xPos >= compX - 20 && xPos <= compX + compWidth + 20) {
-          const isCardinal = (deg % 45 === 0);
-          const isMajorTick = (deg % 15 === 0);
-
-          if (isCardinal || isMajorTick) {
-            let label = getDirectionLabel(deg);
-            ctx.fillStyle = (label === 'N') ? '#ff4444' : '#00ff00';
-            ctx.fillRect(xPos - 1, compY + compH - 10, 2, 10);
-
-            ctx.font = isCardinal ? 'bold 11px monospace' : '9px monospace';
-            ctx.fillText(label, xPos, compY + 14);
-          } else {
-            ctx.fillStyle = 'rgba(0, 255, 0, 0.5)';
-            ctx.fillRect(xPos - 0.5, compY + compH - 5, 1, 5);
-          }
-        }
-      }
-      ctx.restore();
-
-      ctx.fillStyle = '#ffff00';
-      ctx.beginPath();
-      ctx.moveTo(cx, compY + compH);
-      ctx.lineTo(cx - 5, compY + compH + 7);
-      ctx.lineTo(cx + 5, compY + compH + 7);
-      ctx.fill();
-
-      // 2. ARTIFICIAL HORIZON & PITCH LADDER
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.rotate(((tele.roll || 0) * Math.PI) / 180);
-
-      let currentPitch = isPitchInverted ? -(tele.pitch || 0) : (tele.pitch || 0);
-      const pitchPx = currentPitch * 6;
-
-      ctx.strokeStyle = '#00ff00';
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.moveTo(-180, pitchPx);
-      ctx.lineTo(180, pitchPx);
-      ctx.stroke();
-
-      ctx.lineWidth = 1.5;
-      for (let p = -30; p <= 30; p += 10) {
-        if (p === 0) continue;
-        let y = pitchPx - (p * 6);
-        let len = 35;
-
-        ctx.beginPath();
-        ctx.moveTo(-len, y); ctx.lineTo(-len + 12, y);
-        ctx.moveTo(len - 12, y); ctx.lineTo(len, y);
-        ctx.stroke();
-
-        ctx.fillStyle = '#00ff00';
-        ctx.font = '11px monospace';
-        ctx.textAlign = 'left';
-        ctx.fillText(p + '°', len + 6, y + 4);
-        ctx.textAlign = 'right';
-        ctx.fillText(p + '°', -len - 6, y + 4);
-      }
-      ctx.restore();
-
-      // 3. RETICLE
-      ctx.strokeStyle = '#ffff00';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(cx - 30, cy); ctx.lineTo(cx - 10, cy);
-      ctx.moveTo(cx + 10, cy); ctx.lineTo(cx + 30, cy);
-      ctx.moveTo(cx, cy - 8); ctx.lineTo(cx, cy + 8);
-      ctx.stroke();
-
-      // 4. ALERTS
-      if (!isSignalAlive) {
-        ctx.fillStyle = 'rgba(255, 0, 0, 0.7)';
-        ctx.fillRect(cx - 120, cy - 80, 240, 30);
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 13px monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText('📡 NO TELEMETRY LINK', cx, cy - 60);
-      } else if (activeWarningText) {
-        ctx.fillStyle = 'rgba(255, 0, 0, 0.75)';
-        ctx.fillRect(cx - 140, cy + 50, 280, 36);
-        ctx.strokeStyle = '#ffff00';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(cx - 140, cy + 50, 280, 36);
-
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 15px monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText(`⚠️ ${activeWarningText}`, cx, cy + 74);
-      }
-
-      // 5. TELEMETRY PANEL
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-      ctx.fillRect(10, canvas.height - 75, 190, 65);
-      ctx.strokeStyle = '#00ff00';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(10, canvas.height - 75, 190, 65);
-
-      ctx.fillStyle = '#00ff00';
-      ctx.font = '11px monospace';
-      ctx.textAlign = 'left';
-      ctx.fillText(`PITCH: ${currentPitch.toFixed(1)}°`, 18, canvas.height - 58);
-      ctx.fillText(`ROLL : ${(tele.roll || 0).toFixed(1)}°`, 18, canvas.height - 42);
-      ctx.fillText(`GPS  : ${(rawTele.lat ? rawTele.lat.toFixed(4) : '--')}, ${(rawTele.lon ? rawTele.lon.toFixed(4) : '--')}`, 18, canvas.height - 26);
-      ctx.fillText(`ALT  : ${rawTele.alt ? rawTele.alt.toFixed(1) + 'm' : '--'}`, 18, canvas.height - 14);
-
-      requestAnimationFrame(drawHUD);
-    }
-    drawHUD();
-
-    // Auto-Connect Engine
+    // Auto-Connect & PeerJS Logic
     function startConnection() {
       const target = document.getElementById('targetId').value.trim().toLowerCase();
       if (!target) return;
-
-      if (window.speechSynthesis) {
-        const unlockUtterance = new SpeechSynthesisUtterance('');
-        window.speechSynthesis.speak(unlockUtterance);
-      }
 
       statusIndicator.innerText = "CONNECTING...";
       statusIndicator.className = "status-disconnected";
