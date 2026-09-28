@@ -51,7 +51,7 @@
       charging: false
     };
 
-    // 1. ব্যাটারি মনিটরিং ইঞ্জিন
+    // ১. ফোনের ব্যাটারি পার্সেন্টেজ রিডিং
     if (navigator.getBattery) {
       navigator.getBattery().then((battery) => {
         function updateBattery() {
@@ -62,10 +62,10 @@
         updateBattery();
         battery.addEventListener('levelchange', updateBattery);
         battery.addEventListener('chargingchange', updateBattery);
-      });
+      }).catch(() => {});
     }
 
-    // 2. কম্পাস / হেডিং সেন্সর
+    // ২. কম্পাস ও হেডিং
     window.addEventListener('deviceorientation', (event) => {
       let hdg = 0;
       if (event.webkitCompassHeading) {
@@ -77,7 +77,7 @@
       dispHeading.innerText = `${teleData.heading}°`;
     });
 
-    // 3. জিপিএস ট্র্যাকিং
+    // ৩. লাইভ জিপিএস
     if (navigator.geolocation) {
       navigator.geolocation.watchPosition(
         (pos) => {
@@ -86,14 +86,14 @@
           teleData.alt = pos.coords.altitude || 0;
           dispGps.innerText = `${teleData.lat.toFixed(4)}, ${teleData.lon.toFixed(4)}`;
         },
-        (err) => {
+        () => {
           dispGps.innerText = "NO FIX";
         },
         { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
       );
     }
 
-    // 4. ৩ সেকেন্ডের স্বয়ংক্রিয় স্টার্টআপ কাউন্টডাউন
+    // ৪. ৩ সেকেন্ডের কাউন্টডাউন টাইমার
     let count = 3;
     const interval = setInterval(() => {
       count--;
@@ -106,42 +106,53 @@
       }
     }, 1000);
 
-    // 5. ক্যামেরা এবং PeerJS কানেকশন শুরু
+    // ৫. ফ্রন্ট ক্যামেরা চালু (facingMode: 'user')
     async function initCameraAndPeer() {
-      statusText.innerText = "STARTING CAMERA...";
+      statusText.innerText = "STARTING FRONT CAMERA...";
       try {
-        localStream = await navigator.mediaDevices.getUserMedia({
+        // ফ্রন্ট ক্যামেরা নিশ্চিত করতে facingMode: 'user'
+        const constraints = {
           video: {
-            facingMode: 'environment', // পেছনের ক্যামেরা
+            facingMode: 'user',
             width: { ideal: 1280 },
             height: { ideal: 720 },
             frameRate: { ideal: 30 }
           },
           audio: false
-        });
+        };
+
+        try {
+          localStream = await navigator.mediaDevices.getUserMedia(constraints);
+        } catch (e) {
+          // কোনো হার্ডওয়্যার লিমিটেশন থাকলে সাধারণ ফ্রন্ট ক্যামেরা কল
+          localStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'user' },
+            audio: false
+          });
+        }
+
         video.srcObject = localStream;
         statusText.innerText = "CONNECTING BROKER...";
         setupPeer();
       } catch (err) {
-        statusText.innerText = "CAMERA ERROR: " + err.message;
+        statusText.innerText = "CAMERA ERROR: " + err.name;
       }
     }
 
+    // ৬. PeerJS সেটআপ (plane77)
     function setupPeer() {
-      // নির্দিষ্ট ফিক্সড আইডি: plane77
+      if (peer) peer.destroy();
       peer = new Peer('plane77');
 
       peer.on('open', (id) => {
         statusText.innerText = "READY (plane77)";
       });
 
-      // রিসিভার থেকে কল আসলে লাইভ ভিডিও পাঠানো
       peer.on('call', (call) => {
         call.answer(localStream);
         statusText.innerText = "STREAMING LIVE";
       });
 
-      // টেলিমেট্রি ডাটা চ্যানেল হ্যান্ডলিং
       peer.on('connection', (conn) => {
         activeConn = conn;
         statusText.innerText = "CLIENT LINKED";
@@ -153,15 +164,14 @@
       });
 
       peer.on('error', (err) => {
-        statusText.innerText = "PEER ERROR: " + err.type;
-        // আইডি অলরেডি থাকলে আবার রিকানেক্ট চেষ্টা
+        statusText.innerText = "PEER: " + err.type;
         if (err.type === 'unavailable-id') {
-          setTimeout(setupPeer, 3000);
+          setTimeout(setupPeer, 2500);
         }
       });
     }
 
-    // প্রতি 100ms পর পর রিসিভারে লাইভ টেলিমেট্রি ও ব্যাটারি পাঠানো
+    // প্রতি 100ms পরপর টেলিমেট্রি পাঠানো
     setInterval(() => {
       if (activeConn && activeConn.open) {
         activeConn.send(teleData);
