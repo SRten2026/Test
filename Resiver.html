@@ -36,7 +36,7 @@
   <div id="bar">
     <input type="text" id="targetId" value="plane77" style="width: 75px;">
     <button id="connectBtn">CONNECT</button>
-    <button id="mountBtn" title="Mounting Position">📱 FLAT</button>
+    <button id="mountBtn" title="Mounting Position">📱 VERTICAL</button>
     <button id="zeroBtn" title="Calibrate / Set Level Horizon">🎯 ZERO</button>
     <button id="rotateBtn" title="Rotate Camera">🔄 0°</button>
     <button id="invertBtn" title="Invert Pitch">↕️ INV: OFF</button>
@@ -64,8 +64,8 @@
     let tele = { roll: 0, pitch: 0, heading: 0 };
     let calOffsets = { pitch: 0, roll: 0 };
     
-    // Mount Modes: 'FLAT', 'VERTICAL' (Upright), 'LANDSCAPE'
-    const mountModes = ['FLAT', 'VERTICAL', 'LANDSCAPE'];
+    // Mount Modes: 'VERTICAL' (Default for drone mount), 'FLAT', 'LANDSCAPE'
+    const mountModes = ['VERTICAL', 'FLAT', 'LANDSCAPE'];
     let currentMountIndex = 0;
 
     let peer = null;
@@ -86,43 +86,50 @@
     window.addEventListener('resize', resize);
     resize();
 
-    // Orientation Adapter Logic
+    // 1:1 Accurate Orientation Engine
     function computeOrientedTelemetry() {
-      let r = rawTele.roll || 0;
-      let p = rawTele.pitch || 0;
+      let r = rawTele.roll || 0;     // Phone Gamma (-90 to +90)
+      let p = rawTele.pitch || 0;    // Phone Beta (-180 to +180)
       let mode = mountModes[currentMountIndex];
 
-      let computedPitch = p;
-      let computedRoll = r;
+      let targetPitch = p;
+      let targetRoll = r;
 
       if (mode === 'VERTICAL') {
-        // Vertical/Upright mounting: Pitch shifts by 90 degrees
-        computedPitch = p - 90;
-        computedRoll = r;
+        // ফোন যখন খাড়া বা ড্রোনের ফ্রেমে পোর্ট্রেট থাকে:
+        // সামনে-পেছনে টিল্ট (Pitch) হলো Beta মাইনাস 90 ডিগ্রি
+        targetPitch = p - 90;
+        // ডানে-বামে কাত হওয়া (Bank/Roll) সরাসরি Gamma (1:1 রিয়েল ডিগ্রি)
+        targetRoll = r;
       } else if (mode === 'LANDSCAPE') {
-        // Sideways mounting: Pitch and Roll swap axes
-        computedPitch = r;
-        computedRoll = -p;
+        targetPitch = r;
+        targetRoll = -p;
       }
 
-      // Apply Calibration (Zeroing) Offsets
-      computedPitch -= calOffsets.pitch;
-      computedRoll -= calOffsets.roll;
+      // জিরোয়িং / ক্যালিব্রেশন অফসেট বাদ দেওয়া
+      targetPitch -= calOffsets.pitch;
+      targetRoll -= calOffsets.roll;
 
-      tele.pitch = computedPitch;
-      tele.roll = computedRoll;
+      // অ্যাঙ্গেল নরমালাইজেশন (-180 to +180)
+      while (targetRoll > 180) targetRoll -= 360;
+      while (targetRoll < -180) targetRoll += 360;
+      while (targetPitch > 180) targetPitch -= 360;
+      while (targetPitch < -180) targetPitch += 360;
+
+      // হালকা স্মুথিং (Low-pass filter) যাতে সেন্সর ঝাঁকুনি না দেয়
+      tele.pitch += (targetPitch - tele.pitch) * 0.35;
+      tele.roll += (targetRoll - tele.roll) * 0.35;
       tele.heading = rawTele.heading || 0;
     }
 
-    // Mount Mode Toggle Button
+    // Mount Toggle Button
     mountBtn.addEventListener('click', () => {
       currentMountIndex = (currentMountIndex + 1) % mountModes.length;
       mountBtn.innerText = `📱 ${mountModes[currentMountIndex]}`;
-      // Reset zero offset when switching mode
       calOffsets = { pitch: 0, roll: 0 };
     });
 
-    // Zero / Calibrate Level Button
+    // Zero / Level Calibration
     zeroBtn.addEventListener('click', () => {
       let r = rawTele.roll || 0;
       let p = rawTele.pitch || 0;
@@ -138,7 +145,7 @@
       triggerVoiceAlert("Horizon Calibrated");
     });
 
-    // 1. Audio Voice Warning Engine
+    // Voice Alert Engine
     function triggerVoiceAlert(message) {
       if (!audioAlertsEnabled) return;
       const now = Date.now();
@@ -156,7 +163,7 @@
       setTimeout(() => { activeWarningText = ""; }, 3000);
     }
 
-    // 2. Flight Limit Evaluation
+    // Safety Checks
     function evaluateFlightSafety() {
       let roll = tele.roll || 0;
       let pitch = isPitchInverted ? -(tele.pitch || 0) : (tele.pitch || 0);
@@ -172,7 +179,6 @@
       }
     }
 
-    // UI Buttons
     audioBtn.addEventListener('click', () => {
       audioAlertsEnabled = !audioAlertsEnabled;
       audioBtn.innerText = audioAlertsEnabled ? "🔊 AUDIO: ON" : "🔇 AUDIO: OFF";
@@ -211,7 +217,7 @@
       return deg.toString();
     }
 
-    // Draw HUD Canvas
+    // Main Draw Function
     function drawHUD() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       const cx = canvas.width / 2;
@@ -224,9 +230,7 @@
         evaluateFlightSafety();
       }
 
-      // ==========================================
-      // 1. TOP PUBG STYLE COMPASS
-      // ==========================================
+      // 1. TOP COMPASS
       const compWidth = 340;
       const compX = cx - compWidth / 2;
       const compY = 16;
@@ -284,9 +288,7 @@
       ctx.lineTo(cx + 5, compY + compH + 7);
       ctx.fill();
 
-      // ==========================================
       // 2. ARTIFICIAL HORIZON & PITCH LADDER
-      // ==========================================
       ctx.save();
       ctx.translate(cx, cy);
       ctx.rotate(((tele.roll || 0) * Math.PI) / 180);
@@ -321,9 +323,7 @@
       }
       ctx.restore();
 
-      // ==========================================
-      // 3. FIXED RETICLE (YELLOW CROSSHAIR)
-      // ==========================================
+      // 3. RETICLE
       ctx.strokeStyle = '#ffff00';
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -332,9 +332,7 @@
       ctx.moveTo(cx, cy - 8); ctx.lineTo(cx, cy + 8);
       ctx.stroke();
 
-      // ==========================================
-      // 4. ON-SCREEN VISUAL ALERT BANNER
-      // ==========================================
+      // 4. ALERTS
       if (!isSignalAlive) {
         ctx.fillStyle = 'rgba(255, 0, 0, 0.7)';
         ctx.fillRect(cx - 120, cy - 80, 240, 30);
@@ -355,9 +353,7 @@
         ctx.fillText(`⚠️ ${activeWarningText}`, cx, cy + 74);
       }
 
-      // ==========================================
-      // 5. TELEMETRY DATA PANEL (BOTTOM LEFT)
-      // ==========================================
+      // 5. TELEMETRY PANEL
       ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
       ctx.fillRect(10, canvas.height - 75, 190, 65);
       ctx.strokeStyle = '#00ff00';
@@ -376,7 +372,7 @@
     }
     drawHUD();
 
-    // Auto-Connect & Peer Logic
+    // Auto-Connect Engine
     function startConnection() {
       const target = document.getElementById('targetId').value.trim().toLowerCase();
       if (!target) return;
